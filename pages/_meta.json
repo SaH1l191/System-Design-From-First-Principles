@@ -1,0 +1,15 @@
+{
+  "index": "Overview",
+  "01-core-building-blocks": "Core Building Blocks",
+  "02-scalability": "Scalability & Performance",
+  "03-distributed-systems": "Distributed Systems",
+  "04-advanced-topics": "Advanced Topics",
+  "05-architecture-patterns": "Architecture Patterns",
+  "06-design-decisions": "Design Decisions",
+  "07-concurrency": "Concurrency & Parallelism",
+  "08-observability": "Observability & Monitoring",
+  "09-security": "Security",
+  "10-real-time": "Real-Time & Communication",
+  "11-geospatial": "Location & Geospatial",
+  "resources": "Resources"
+}
