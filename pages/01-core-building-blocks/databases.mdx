@@ -1,0 +1,1740 @@
+---
+title: Databases — SQL, NoSQL & Internals
+---
+
+import { Callout } from 'nextra/components'
+
+# 1.2 Databases
+
+> Databases are the persistent storage layer of any system. Choosing the right database and understanding its internals is critical for system design. This section covers SQL, NoSQL, and database internals.
+
+## 1.2.1 Relational Databases (SQL)
+
+Relational databases organize data into tables with predefined schemas. They use SQL (Structured Query Language) for queries and enforce ACID properties for data integrity.
+
+### Tables, Rows, Columns
+
+```sql
+-- Users table
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Orders table with foreign key
+CREATE TABLE orders (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  total DECIMAL(10,2) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Primary Keys and Foreign Keys
+
+- **Primary Key:** Unique identifier for each row (e.g., `id`). Auto-incrementing integers or UUIDs.
+- **Foreign Key:** Reference to a primary key in another table. Enforces referential integrity.
+
+```sql
+-- Foreign key constraint
+ALTER TABLE orders
+ADD CONSTRAINT fk_user
+FOREIGN KEY (user_id) REFERENCES users(id);
+```
+
+### Joins
+
+```sql
+-- INNER JOIN: Only matching records
+SELECT users.name, orders.total
+FROM users
+INNER JOIN orders ON users.id = orders.user_id;
+
+-- LEFT JOIN: All users, even without orders
+SELECT users.name, orders.total
+FROM users
+LEFT JOIN orders ON users.id = orders.user_id;
+
+-- RIGHT JOIN: All orders, even without matching users
+SELECT users.name, orders.total
+FROM users
+RIGHT JOIN orders ON users.id = orders.user_id;
+
+-- FULL OUTER JOIN: All records from both tables
+SELECT users.name, orders.total
+FROM users
+FULL OUTER JOIN orders ON users.id = orders.user_id;
+```
+
+### Normalization
+
+Normalization reduces data redundancy by organizing data into related tables.
+
+**1NF (First Normal Form):**
+
+- Each column contains atomic values
+- No repeating groups
+
+```
+❌ Bad: orders = ["order1", "order2", "order3"]
+✅ Good: Each order is a separate row
+```
+
+**2NF (Second Normal Form):**
+
+- 1NF + no partial dependencies
+- All non-key attributes depend on the entire primary key
+
+**3NF (Third Normal Form):**
+
+- 2NF + no transitive dependencies
+- Non-key attributes don't depend on other non-key attributes
+
+```
+❌ Bad: orders table has customer_name (depends on customer_id, not order_id)
+✅ Good: customer_name in customers table, orders references customer_id
+```
+
+**BCNF (Boyce-Codd Normal Form):**
+
+- 3NF + every determinant is a candidate key
+
+### Denormalization
+
+Deliberately adding redundant data to improve read performance.
+
+**When to denormalize:**
+
+- Read-heavy workloads (analytics, dashboards)
+- Joins are too expensive
+- Data changes infrequently
+- You need to optimize specific query patterns
+
+**Trade-offs:**
+
+- ✅ Faster reads (no joins needed)
+- ❌ Slower writes (must update multiple places)
+- ❌ More storage
+- ❌ Risk of data inconsistency
+
+### ACID Properties
+
+ACID properties are database guarantees that ensure transactions are reliable, consistent, isolated from concurrency issues, and durable even after failures.
+
+Think of a transaction as a group of operations treated as one unit of work.
+
+Example: Bank transfer A → B (₹1000) involves 2 operations:
+
+- Deduct ₹1000 from A
+- Add ₹1000 to B
+
+If one succeeds and another fails, money gets corrupted. That's where ACID comes in.
+
+**Memory trick:**
+
+- A → All or Nothing
+- C → Correct State
+- I → Independent Transactions
+- D → Data Never Lost
+
+Or:
+
+- Atomicity = rollback
+- Consistency = rules
+- Isolation = concurrency
+- Durability = persistence
+
+#### 1. Atomicity (All or Nothing)
+
+A transaction either COMPLETES FULLY or ROLLS BACK FULLY. No partial execution.
+
+**Example: Money Transfer**
+
+Initial: A = ₹5000, B = ₹2000. Transfer ₹1000.
+
+```sql
+BEGIN TRANSACTION;
+UPDATE accounts SET balance = balance - 1000 WHERE id = 'A';
+UPDATE accounts SET balance = balance + 1000 WHERE id = 'B';
+COMMIT;
+```
+
+What if server crashes after deduction? A = ₹4000, B = ₹2000. Money disappeared!
+
+Atomicity prevents this. Database does ROLLBACK:
+
+- A = ₹5000
+- B = ₹2000
+
+As if nothing happened.
+
+**Real-world analogy:** ATM cash withdrawal — either money deducted + cash dispensed, or nothing happens. No half-state.
+
+**Problem Atomicity Solves:**
+
+- Partial writes
+- Corrupted state
+- Lost money/orders/payments
+
+#### 2. Consistency (Always Valid Data)
+
+Database always moves from VALID STATE → VALID STATE. Rules/constraints are never violated.
+
+**Example: Bank Rule**
+
+Rule: balance &gt;= 0
+
+Suppose A = ₹500. User tries to transfer ₹1000. Without consistency: A = -500 ❌ (invalid data). Database blocks it.
+
+**Example: Foreign Keys**
+
+```sql
+INSERT INTO bookings(user_id) VALUES(999);
+```
+
+But user 999 doesn't exist. Database rejects it because consistency ensures no invalid relationships.
+
+**Constraints That Help Consistency:**
+
+- Primary key
+- Foreign key
+- Unique
+- Check constraints
+- Business rules (e.g., CHECK(balance &gt;= 0))
+
+**Problem Consistency Solves:**
+
+- Invalid data
+- Broken relations
+- Impossible states (negative balance, booking for non-existent user, duplicate email)
+
+#### 3. Isolation (Concurrency Safety)
+
+Multiple transactions running simultaneously should not interfere with each other. Users should behave as if transactions happened one by one.
+
+**Example: Seat Booking**
+
+Only 1 seat left. Two users book simultaneously.
+
+Without Isolation:
+
+- User A: Reads seats = 1
+- User B: Reads seats = 1
+- Both reserve → Seats sold = 2 ❌ (Overselling)
+
+With Isolation: Database locks/controls access. Transaction A executes first, then Transaction B checks again, finds Seats = 0, fails safely.
+
+**Another Example: Lost Update**
+
+Initial balance: ₹1000. Two transactions:
+
+- T1: Read 1000, Add 500
+- T2: Read 1000, Subtract 200
+
+Expected: 1300. Without isolation: One write overwrites another → Final: 800 ❌ or 1500 ❌
+
+**Problem Isolation Solves:**
+
+- Race conditions
+- Double booking
+- Lost updates
+- Dirty reads
+
+Very important in: Payments, Hotel booking, Ticket booking, Inventory systems.
+
+#### 4. Durability (Committed = Permanent)
+
+Once database says COMMIT SUCCESSFUL, data survives: Server crash, Restart, Power failure.
+
+**Example:** User pays ₹10,000. Server returns "Payment successful". Then server crashes immediately. Without durability: Payment lost ❌
+
+**How DB Achieves Durability:**
+
+Using Write Ahead Log (WAL). Database first writes "I am about to do X" to durable storage, then actual data update. If crash happens, DB recovers from logs.
+
+This is how databases like PostgreSQL and MySQL recover after crashes.
+
+**Real Backend Example (Payment + Order):**
+
+Imagine e-commerce: User buys iPhone. Transaction:
+
+1. Deduct inventory
+2. Create order
+3. Save payment
+
+- **Atomicity:** Either all happen or none
+- **Consistency:** Inventory cannot go -1 phones ❌
+- **Isolation:** Two users cannot buy last item simultaneously
+- **Durability:** After "Order successful", crash won't remove order
+
+### Transactions and Isolation Levels
+
+```sql
+BEGIN TRANSACTION;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+COMMIT;
+```
+
+Isolation levels control how much one transaction can see/interfere with another concurrent transaction.
+
+The tradeoff:
+
+- Higher isolation = safer data, fewer bugs, but slower performance due to locks/versioning
+- More Isolation → More Safety ✅ → Less Concurrency ❌
+- Less Isolation → Faster ✅ → More Weird Bugs ❌
+
+#### Concurrency Problems
+
+Before understanding isolation levels, know the problems they prevent:
+
+**1. Dirty Read**
+
+Reading uncommitted data from another transaction.
+
+```sql
+-- Initial balance: ₹1000
+-- Transaction T1
+BEGIN;
+UPDATE accounts SET balance = 5000 WHERE id = 1;
+-- T1 has not committed yet
+
+-- Transaction T2
+SELECT balance FROM accounts; -- Sees: 5000
+
+-- T1 fails
+ROLLBACK; -- Actual balance becomes: 1000
+```
+
+Problem: T2 saw fake data that never actually existed.
+
+**2. Non-Repeatable Read**
+
+You read same row twice in same transaction and get different values.
+
+```sql
+-- T1:
+BEGIN;
+SELECT balance; -- Gets: 1000
+
+-- Meanwhile T2:
+UPDATE balance = 2000;
+COMMIT;
+
+-- T1 again:
+SELECT balance; -- Gets: 2000 ❌
+```
+
+Same query, same transaction, different result. Causes inconsistent business logic.
+
+**3. Phantom Read**
+
+New rows appear/disappear between reads.
+
+```sql
+-- T1:
+SELECT * FROM bookings WHERE room_id = 1; -- Returns: 2 bookings
+
+-- Meanwhile T2 inserts:
+INSERT INTO bookings(...) VALUES(...);
+COMMIT;
+
+-- T1 runs same query again: Now 3 bookings ❌
+```
+
+A "phantom row" appeared. Very important in booking systems.
+
+**4. Lost Update**
+
+Two transactions overwrite each other.
+
+```sql
+-- Initial: Balance = 1000
+-- T1: Reads 1000, Add 500
+-- T2: Reads 1000, Subtract 200
+-- Expected: 1300
+-- But one write overwrites another: Final: 800 ❌ or 1500 ❌
+```
+
+#### Isolation Levels
+
+**1. Read Uncommitted (Lowest Isolation)**
+
+Rule: Transactions can read UNCOMMITTED DATA. Dirty reads are allowed. Fastest but unsafe.
+
+```sql
+-- T1:
+BEGIN;
+UPDATE accounts SET balance = 5000;
+-- Not committed
+
+-- T2:
+SELECT balance; -- Sees: 5000
+
+-- T1:
+ROLLBACK; -- Oops. T2 saw invalid data.
+```
+
+Problems Allowed: ✅ Dirty Read, ✅ Non-repeatable Read, ✅ Phantom Read
+
+Use Case: Almost never used. Maybe analytics where accuracy isn't critical.
+
+**2. Read Committed (Most Common)**
+
+Rule: You can only read COMMITTED DATA. No dirty reads.
+
+Used by: PostgreSQL (default), Oracle Database
+
+```sql
+-- T1:
+BEGIN;
+UPDATE accounts SET balance = 5000;
+-- No commit yet
+
+-- T2:
+SELECT balance; -- Still sees: 1000
+
+-- Only after COMMIT:
+-- T2 sees: 5000 ✅
+```
+
+Problems Prevented: ❌ Dirty Read Still Possible: ✅ Non-repeatable Read, ✅ Phantom Read
+
+Use Case: General web apps. Good balance of Performance + Safety.
+
+**3. Repeatable Read**
+
+Rule: If you read a row once, you'll always see same version inside transaction.
+
+```sql
+-- T1:
+BEGIN;
+SELECT balance; -- Gets: 1000
+
+-- T2:
+UPDATE balance = 2000;
+COMMIT;
+
+-- T1 again:
+SELECT balance; -- Still gets: 1000 ✅ (Snapshot consistency)
+```
+
+Problems Prevented: ❌ Dirty Read, ❌ Non-repeatable Read Still Possible: ⚠ Phantom Read (theoretical SQL standard, but MySQL InnoDB mostly prevents using gap locks)
+
+Use Case: Banking, inventory, bookings. Where stable reads matter.
+
+**4. Serializable (Highest Isolation)**
+
+Rule: Database behaves as if transactions execute one by one, even if actually concurrent. Safest level.
+
+```sql
+-- Example: Seat Booking
+-- 1 seat left.
+
+-- T1:
+BEGIN;
+SELECT seats = 1;
+
+-- T2:
+BEGIN;
+SELECT seats = 1;
+
+-- Without serializable: Both buy seat → Oversold
+
+-- With Serializable:
+-- DB internally serializes: T1 executes fully THEN T2 executes
+-- T2 sees: Seats = 0 → Fails safely
+```
+
+Problems Prevented: ❌ Dirty Read, ❌ Non-repeatable Read, ❌ Phantom Read, ❌ Lost Update
+
+Downside: More locks, waiting, deadlocks, reduced throughput. Can hurt performance.
+
+#### Comparison Table
+
+| Isolation Level | Dirty Read | Non-Repeatable | Phantom Read | Speed |
+| --- | --- | --- | --- | --- |
+| Read Uncommitted | ❌ Allows | ❌ Allows | ❌ Allows | Fastest |
+| Read Committed | ✅ Prevents | ❌ Allows | ❌ Allows | Fast |
+| Repeatable Read | ✅ Prevents | ✅ Prevents | ⚠ Sometimes | Medium |
+| Serializable | ✅ Prevents | ✅ Prevents | ✅ Prevents | Slowest |
+
+#### Real Backend Mapping
+
+- **Banking/Payments:** Use Serializable / Repeatable Read (money corruption unacceptable)
+- **Hotel Booking / Ticket Booking:** Use Repeatable Read or Serializable + locking (isolation alone may not prevent double booking in distributed systems)
+- **Social Media Feed:** Use Read Committed (nobody cares if likes count changes during read)
+- **Analytics Dashboard:** Sometimes Read Uncommitted (speed &gt; perfect accuracy)
+
+**Easy memory trick:**
+
+- RU → Read garbage
+- RC → Read committed only
+- RR → Same row same result
+- SER → One-by-one illusion
+
+### Indexes
+
+Indexes are one of the most important DB optimization concepts for backend interviews and real systems.
+
+Think of an index like the index page of a book:
+
+- Without index: You scan page-by-page
+- With index: You jump directly to the page
+
+Same thing in databases.
+
+**Why Indexes Exist:**
+
+```sql
+SELECT * FROM users WHERE email = 'rahul@gmail.com';
+```
+
+Without index: DB scans Alice ❌, Bob ❌, Rahul ✅ (Full Table Scan, O(n))
+
+With index: Jump directly to email location (O(log n))
+
+**But Why Not Index Everything?**
+
+Because indexes have cost. Every INSERT/UPDATE/DELETE must also update index.
+
+```sql
+INSERT INTO users(...)
+-- Database must:
+-- 1. Write row
+-- 2. Update index structure
+```
+
+So:
+
+- Reads faster ✅
+- Writes slower ❌
+- More storage ❌
+
+**Memory trick:** Index = faster read, slower write
+
+#### 1. B-Tree Index (Most Common)
+
+This is default in most SQL DBs. Used for: ✅ Exact match, ✅ Range queries, ✅ Sorting, ✅ Prefix search.
+
+**Structure:** Database stores data in a balanced tree. Instead of scanning 1→2→3→4→5→..., it navigates a tree:
+
+```
+          M
+       /     \
+      G       T
+    /  \     /  \
+   C    J   P    Z
+```
+
+**Complexity:** O(log n)
+
+**Example:**
+
+```sql
+CREATE INDEX idx_users_email ON users(email);
+SELECT * FROM users WHERE email = 'alice@gmail.com'; -- Fast
+```
+
+**Range Queries:**
+
+```sql
+SELECT * FROM users WHERE age BETWEEN 20 AND 30; -- Works
+SELECT * FROM users ORDER BY created_at; -- Works (B-tree stores sorted order)
+```
+
+**Great For:** =, &gt;, &lt;, BETWEEN, ORDER BY, LIKE 'abc%' **Not Great For:** LIKE '%gmail.com' (prefix missing)
+
+##### How Database Maintains B-Tree
+
+This is one of the most important database internals topics. Most developers know "B-Tree = O(log n)", but not how the database actually maintains it when rows are inserted, updated, and deleted.
+
+**What Is An Index Really?**
+
+Suppose you have a users table:
+
+```
+id | name  | age
+1  | Alice | 25
+2  | Bob   | 30
+3  | Carol | 22
+```
+
+Query: `SELECT * FROM users WHERE age = 30;`
+
+Without an index, DB does sequential scan (O(n)). For 10 million rows: 10 million comparisons.
+
+To avoid this, databases create an index. Think of it like a book's index page: Age 22 → Page X, Age 25 → Page Y, Age 30 → Page Z. The database jumps directly to the location.
+
+**Why B-Tree?**
+
+Imagine storing ages sorted: 22, 25, 30, 35, 40, 45, 50, 55, 60, 65
+
+A simple array allows binary search (O(log n)). But databases have a problem: Rows are constantly inserted and deleted. Example: Insert 32 → Need to shift many values (expensive).
+
+So databases use a B-Tree.
+
+**What Is A B-Tree?**
+
+A B-Tree is a balanced multi-way search tree. Instead of:
+
+```
+        40
+       /  \
+     20    60
+```
+
+It stores multiple values per node:
+
+```
+       [30 | 60]
+      /    |    \
+   <30   30-60  >60
+```
+
+Each node contains Keys and Pointers.
+
+**Real B-Tree Example:**
+
+Index on email. Tree:
+
+```
+              [m]
+            /     \
+        [g]         [t]
+      /    \      /    \
+   [c]    [j]  [p]    [z]
+```
+
+Searching `WHERE email = 'sam@gmail.com'`:
+
+1. sam &gt; m → go right
+2. sam &lt; t → go left
+3. sam &gt; p → go right
+4. found leaf
+
+Only a few comparisons, not millions. Complexity: O(log n)
+
+**Why Is It Called "Balanced"?**
+
+All leaf nodes stay at the same depth. Databases continuously rebalance.
+
+**How DB Maintains B-Tree During Insert:**
+
+Suppose node size is 3 keys. Current tree: \[10 | 20 | 30\]
+
+Insert 40: Node becomes \[10 | 20 | 30 | 40\] → Overflow (not allowed)
+
+Database performs split:
+
+- Middle key: 20 → Move up
+- Result:
+
+```
+       [20]
+      /    \
+   [10]  [30 | 40]
+```
+
+Tree remains balanced.
+
+**Larger Insert Example:**
+
+Current:
+
+```
+        [50]
+       /    \
+ [10 20]   [70 80]
+```
+
+Insert 90: Right node becomes \[70 80 90\] (still okay)
+
+Insert 100: Overflow \[70 80 90 100\] → Split:
+
+```
+          [50 | 80]
+         /    |    \
+ [10 20] [70] [90 100]
+```
+
+Parent gets new key. Sometimes split propagates upward. Root can split too. Tree height increases by 1. Still balanced.
+
+**What Happens During Delete?**
+
+Deleting can create underflow. Two methods:
+
+1. **Borrow:** Sibling has extra keys
+2. **Merge:** If borrowing impossible, merge nodes
+
+**What Is Stored In Leaf Nodes?**
+
+Leaf nodes contain actual index entries:
+
+```
+22 -> Row #300
+25 -> Row #100
+30 -> Row #200
+```
+
+The index stores Key + Pointer to row, not the entire row. Then DB fetches actual row.
+
+**Why Range Queries Are Fast:**
+
+B-Tree leaves are linked in order: 20 -&gt; 21 -&gt; 22 -&gt; 23 -&gt; 24 -&gt; 25
+
+Search for first value (20), then walk forward. Very efficient. That's why B-Trees support &gt;, &lt;, BETWEEN, ORDER BY.
+
+**Why LIKE 'abc%' Works:**
+
+Index sorted: abc1, abc2, abc3, abd1, abe1
+
+DB finds "abc" then scans nearby entries. Fast.
+
+**Why LIKE '%gmail.com' Fails:**
+
+Index sorted from the beginning: alice..., bob..., charlie... Database doesn't know where "gmail.com" starts. Must inspect many values. Often becomes Seq Scan.
+
+**Why Indexes Make Writes Slower:**
+
+```sql
+INSERT INTO users ...
+-- Without index: Write row only
+-- With 5 indexes: Write row + Update index #1-5 + Node splits + Rebalancing + Disk writes
+```
+
+Therefore: Indexes = Faster Reads, Indexes = Slower Writes
+
+**How Query Planner Chooses Index:**
+
+DB query planner decides which path is cheapest. Sometimes index exists but DB ignores it.
+
+Example: `WHERE gender='male'` where 50% rows are male → Index useless, Full scan cheaper.
+
+**EXPLAIN ANALYZE Interpretation:**
+
+- Good: Index Scan (used B-Tree index)
+- Bad: Seq Scan (read every row)
+
+**How B+ Tree Differs From B-Tree:**
+
+Most modern databases (PostgreSQL, MySQL InnoDB, SQL Server, Oracle) actually use B+ Trees, not pure B-Trees.
+
+Difference:
+
+- B-Tree: Internal nodes → data, Leaf nodes → data
+- B+ Tree: Internal nodes → keys only, Leaf nodes → actual index entries
+
+And leaves are linked: 20 -&gt; 21 -&gt; 22 -&gt; 23 -&gt; 24
+
+This makes range scans extremely fast. Most interviewers say "B-Tree", but production databases usually mean B+ Tree.
+
+#### 2. Hash Index
+
+Instead of tree, uses HashMap (like JS object / Go map).
+
+**Example:**
+
+```sql
+CREATE INDEX idx_email_hash ON users USING HASH(email);
+```
+
+DB computes hash(email), then directly finds value. Complexity: O(1). Very fast.
+
+**Huge Limitation:** Only works for Exact Match.
+
+Good: `WHERE email = 'abc@gmail.com'`Bad: `WHERE age &gt; 20` ❌, `ORDER BY created_at` ❌, `BETWEEN` ❌
+
+Because hashes are unordered.
+
+**When Used?** Rarely directly. Most DBs default to B-tree.
+
+#### 3. Composite Index (Very Important)
+
+Index on multiple columns together.
+
+**Example:**
+
+```sql
+CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+```
+
+Now DB indexes: (42, paid), (42, pending), (50, shipped)
+
+**Leftmost Prefix Rule (VERY IMPORTANT):**
+
+Order matters. Index: (user_id, status)
+
+- Fast: `WHERE user_id = 42 AND status = 'paid'` (uses index fully ✅)
+- Fast: `WHERE user_id = 42` (still fast ✅, because first column exists)
+- Slow: `WHERE status = 'paid'` (Bad ❌, because index starts with user_id first)
+
+Index sorted like: (1,pending), (1,paid), (2,paid), (3,shipped)
+
+Searching only status means: Need scan.
+
+**Rule to Remember:** Composite index works left → right
+
+**Better Example:**
+
+Index: (created_at, user_id)
+
+- Good: `WHERE created_at > ?`
+- Good: `WHERE created_at > ? AND user_id = ?`
+- Bad: `WHERE user_id = ?`
+
+#### Composite Index Internals
+
+Index: (user_id, status) stored as:
+
+```
+(1,pending)
+(1,paid)
+(2,paid)
+(3,shipped)
+```
+
+Actually sorted lexicographically, similar to a dictionary. First by user_id, then by status.
+
+**Why Leftmost Prefix Rule Exists:**
+
+Search `WHERE user_id = 1` → Easy. DB jumps directly to (1,...) → Fast.
+
+Search `WHERE status='paid'` → Problem. Tree isn't sorted by status first. Database must scan many entries.
+
+**Quick Interview Summary:**
+
+- Index = separate data structure for fast lookup
+- B+ Tree is the most common database index
+- Search complexity: O(log n)
+- Inserts cause node splits
+- Deletes cause borrow or merge operations
+- Leaf nodes contain key → row pointer mappings
+- Leaves are linked for fast range scans
+- Composite indexes follow the leftmost prefix rule
+- B-Trees support =, &gt;, &lt;, BETWEEN, ORDER BY, LIKE 'abc%'
+- Hash indexes mainly support exact matches
+- More indexes improve reads but slow writes
+- EXPLAIN ANALYZE shows whether the planner uses an index (Index Scan) or scans the whole table (Seq Scan)
+
+### Query Optimization
+
+Goal: Reduce query execution time.
+
+#### 1. EXPLAIN ANALYZE
+
+Very important. Shows how DB executes query.
+
+**Example:**
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE email = 'abc@gmail.com';
+```
+
+Output may show:
+
+- Good: Index Scan (meaning index used)
+- Bad: Seq Scan (Sequential scan, means full table scan ❌, could indicate missing index)
+
+**Example Join:**
+
+```sql
+EXPLAIN ANALYZE
+SELECT users.name, COUNT(orders.id)
+FROM users
+LEFT JOIN orders ON users.id = orders.user_id
+GROUP BY users.id;
+```
+
+DB shows: Join strategy, Cost, Time, Rows scanned. Helps optimize.
+
+#### 2. Add Indexes
+
+**WHERE clause:**
+
+```sql
+WHERE email = ?
+-- Add: INDEX(email)
+```
+
+**JOIN:**
+
+```sql
+JOIN orders ON users.id = orders.user_id
+-- Index: orders(user_id) — Very important. Without join index: slow joins.
+```
+
+**ORDER BY:**
+
+```sql
+ORDER BY created_at
+-- Add: INDEX(created_at)
+```
+
+#### 3. Avoid SELECT \*
+
+Bad:
+
+```sql
+SELECT * FROM users;
+```
+
+Loads everything: password, bio, image, settings. Huge memory/network cost.
+
+Better:
+
+```sql
+SELECT id, name, email FROM users;
+```
+
+Only needed columns. Faster. Especially important in APIs.
+
+#### 4. Use LIMIT
+
+Bad:
+
+```sql
+SELECT * FROM logs; -- Millions of rows
+```
+
+Good:
+
+```sql
+SELECT * FROM logs LIMIT 20;
+```
+
+For pagination: `LIMIT 20 OFFSET 40` (though cursor pagination is better at scale)
+
+#### 5. Connection Pooling
+
+Creating DB connection is expensive.
+
+Bad: Every request → Open DB connection → Query → Close connection (Slow)
+
+Better: Reuse connections. Pool: 10–100 reusable connections. Request borrows one, then returns it. Much faster.
+
+Node example:
+
+```javascript
+const pool = new Pool({ max: 20 });
+```
+
+Useful in: Express, NestJS, Go services
+
+#### 6. How Database Chooses Index
+
+DB query planner decides. It checks which path is cheapest.
+
+Sometimes index exists but DB ignores it. Example: `WHERE gender = 'male'` where 50% rows are male → Index useless, Full scan cheaper.
+
+#### Real Backend Example
+
+Booking system query:
+
+```sql
+SELECT * FROM bookings
+WHERE hotel_id = ?
+AND check_in >= ?
+ORDER BY created_at;
+```
+
+Good indexes: (hotel_id, check_in), (created_at)
+
+Without index: Millions of booking scans ❌ With index: Fast lookup ✅
+
+### The N+1 Query Problem
+
+The N+1 problem is a general performance anti-pattern that occurs when your code fetches a list of items, then executes a separate query for each item to fetch related data. It is not specific to any database or ORM — it is a fundamental application-level issue.
+
+This topic is really about how databases retrieve related data efficiently and which indexes help each strategy.
+
+#### The Problem
+
+Suppose you have:
+
+**users table:**
+
+```
+id | name
+1  | Alice
+2  | Bob
+```
+
+**posts table:**
+
+```
+id | user_id | title
+1  | 1       | Post A
+2  | 1       | Post B
+3  | 2       | Post C
+```
+
+You want:
+
+```json
+[
+  { "id": 1, "name": "Alice", "posts": [...] },
+  { "id": 2, "name": "Bob", "posts": [...] }
+]
+```
+
+**Bad Approach:**
+
+```sql
+SELECT * FROM users;  -- Returns: Alice, Bob
+
+-- Then for EACH user:
+SELECT * FROM posts WHERE user_id = 1;
+SELECT * FROM posts WHERE user_id = 2;
+```
+
+Total: 1 + N queries. If 10,000 users: 10001 queries.
+
+#### Why Is N+1 Slow?
+
+Not because SQL is slow. Because every query has overhead:
+
+- Network round trip
+- Parse SQL
+- Plan query
+- Acquire connection
+- Execute
+- Return result
+
+Even if each query takes 1ms: 10000 × 1ms = 10 seconds
+
+#### Solution 1: JOIN
+
+```sql
+SELECT users.*, posts.*
+FROM users
+JOIN posts ON users.id = posts.user_id;
+```
+
+**How DB Executes JOIN:**
+
+Database must find: users.id == posts.user_id
+
+**Critical Index:**
+
+```sql
+CREATE INDEX idx_posts_user_id ON posts(user_id);
+```
+
+Without it: For every user, scan all posts. Complexity: Users × Posts = O(nm) — Very bad.
+
+With index: Find user 1 → Jump directly to posts with user_id=1. Each lookup is O(log n). Much faster.
+
+**Why Foreign Keys Usually Need Indexes:**
+
+Most joins are: `ON users.id = posts.user_id`
+
+Therefore: `CREATE INDEX idx_posts_user_id ON posts(user_id);` is one of the most important indexes in backend systems.
+
+**What Happens Inside the B+ Tree?**
+
+Index on posts(user_id). Leaf nodes:
+
+```
+1 -> row 100
+1 -> row 101
+1 -> row 102
+2 -> row 200
+3 -> row 300
+3 -> row 301
+```
+
+When joining user_id = 1: DB navigates B+ Tree → Finds 1 -&gt; rows 100,101,102 immediately.
+
+#### Solution 2: Batching (IN Clause)
+
+Instead of:
+
+```sql
+SELECT * FROM customers WHERE id = 1;
+SELECT * FROM customers WHERE id = 2;
+SELECT * FROM customers WHERE id = 3;
+```
+
+Use:
+
+```sql
+SELECT * FROM customers WHERE id IN (1,2,3);
+```
+
+One query. Database does multiple index lookups using B+ Tree. Not scan entire table.
+
+**Best Index For IN Queries:** PRIMARY KEY(id) or INDEX(id)
+
+#### Solution 3: DataLoader
+
+GraphQL commonly causes N+1. DataLoader trick: Collect all requests (1,2,3,4), generate:
+
+```sql
+SELECT * FROM posts WHERE user_id IN (1,2,3,4);
+```
+
+Single query. Required Index:
+
+```sql
+CREATE INDEX idx_posts_user_id ON posts(user_id);
+```
+
+#### Solution 4: Eager Loading
+
+Framework-level solutions:
+
+- SQLAlchemy: `joinedload()`, `selectinload()`
+- Django: `select_related()`, `prefetch_related()`
+- Rails: `includes()`, `joins()`
+
+These aren't magic. Internally they become JOIN or batch queries.
+
+**Which Indexes Do Eager Loading Need?**
+
+For users → posts: INDEX(posts.user_id) For orders → customers: INDEX(orders.customer_id) For reviews → products: INDEX(reviews.product_id)
+
+**Rule:** Always index the column used on the child side of a relationship.
+
+#### Nested Example
+
+Suppose API returns: Users → Posts → Comments
+
+Bad: SELECT \* FROM users; Then SELECT \* FROM posts WHERE user_id=?; (100 times). Then SELECT \* FROM comments WHERE post_id=?; (1000 times).
+
+Explodes into: 1 + 100 + 1000 queries
+
+Indexes needed: INDEX(posts.user_id), INDEX(comments.post_id)
+
+Without them: Every lookup becomes table scans.
+
+#### Tree Traversal Problem
+
+Comments with replies:
+
+```
+Comment 1
+ ├── Reply A
+ │    └── Reply B
+ └── Reply C
+```
+
+Queries: `SELECT * FROM comments WHERE parent_id = ?;` (Repeated recursively)
+
+Required index:
+
+```sql
+CREATE INDEX idx_comments_parent ON comments(parent_id);
+```
+
+Otherwise every level scans the entire comments table.
+
+#### REST Example
+
+Endpoint: GET /orders
+
+Bad code:
+
+```python
+orders = get_orders()
+for order in orders:
+    customer = get_customer(order.customer_id)
+```
+
+Creates: 1 + N queries
+
+Better:
+
+```sql
+SELECT * FROM customers WHERE id IN (...)
+```
+
+Need index: PRIMARY KEY(id)
+
+#### How to Detect N+1
+
+Logs show:
+
+```sql
+SELECT * FROM posts WHERE user_id=1;
+SELECT * FROM posts WHERE user_id=2;
+SELECT * FROM posts WHERE user_id=3;
+SELECT * FROM posts WHERE user_id=4;
+```
+
+Same query, different parameter, repeated many times. Huge red flag.
+
+**What EXPLAIN Should Show:**
+
+Good: Index Scan using idx_posts_user_id (WHERE user_id = ? uses index) Bad: Seq Scan on posts (Read every post row for each lookup — terrible in joins and N+1 scenarios)
+
+#### Interview-Level Rules to Memorize
+
+**For JOINs:** users.id = posts.user_id → Index: INDEX(posts.user_id)
+
+**For IN Queries:** WHERE id IN (...) → Index: PRIMARY KEY(id) or INDEX(id)
+
+**For Parent/Child Relations:** orders.customer_id, reviews.product_id, posts.user_id, comments.parent_id → Always index the foreign-key column.
+
+**For N+1 Fixes:** Use JOINs, Batching (IN), DataLoader, Eager Loading. All of them ultimately rely on the same thing: Fast indexed lookups in a B+ Tree instead of repeatedly scanning tables.
+
+**Detection:** Look at your database query logs. If you see the same query pattern repeated N times with slightly different parameters (e.g., `WHERE user_id = 1`, `WHERE user_id = 2`, `WHERE user_id = 3`...), you have an N+1 problem.
+
+**Easy memory trick:**
+
+- B-tree = general purpose
+- Hash = exact lookup only
+- Composite = order matters
+- EXPLAIN = see DB thinking
+- N+1 = query explosion
+
+---
+
+## 1.2.2 NoSQL Databases
+
+NoSQL databases are non-relational databases designed for specific data models and scale requirements. They trade ACID guarantees for horizontal scalability and flexibility.
+
+### Key-Value Stores (Redis, DynamoDB, Memcached)
+
+**Data model:** Simple key-value pairs.
+
+```
+SET user:42:name "Alice"
+GET user:42:name  → "Alice"
+```
+
+**Best for:**
+
+- Caching (Redis, Memcached)
+- Session storage
+- User profiles
+- Feature flags
+- Rate limiting counters
+
+**Redis data structures:**
+
+- Strings: `SET key value`
+- Hashes: `HSET user:42 name "Alice" email "alice@example.com"`
+- Lists: `LPUSH queue "task1"`
+- Sets: `SADD tags "java" "python"`
+- Sorted Sets: `ZADD leaderboard 100 "player1"`
+- Streams: `XADD events * type "order" id "123"`
+
+### Document Databases (MongoDB, CouchDB)
+
+**Data model:** JSON/BSON documents with flexible schemas.
+
+```json
+{
+  "_id": "user_42",
+  "name": "Alice",
+  "email": "alice@example.com",
+  "orders": [
+    { "id": "order_1", "total": 50.00 },
+    { "id": "order_2", "total": 30.00 }
+  ],
+  "preferences": {
+    "theme": "dark",
+    "notifications": true
+  }
+}
+```
+
+**Best for:**
+
+- Content management systems
+- User profiles with varying attributes
+- Product catalogs
+- Event logging
+- When schema evolves frequently
+
+### Wide-Column Stores (Cassandra, HBase, Bigtable)
+
+**Data model:** Tables with rows and dynamic columns.
+
+```
+Table: user_events
+Row Key: user_42
+Columns: {
+  "event_1": { "type": "login", "timestamp": "2026-01-01", "ip": "1.2.3.4" },
+  "event_2": { "type": "purchase", "timestamp": "2026-01-02", "amount": 50 }
+}
+```
+
+**Best for:**
+
+- Time-series data (IoS, metrics, logs)
+- Write-heavy workloads
+- Large datasets (petabytes)
+- When you need predictable latency at scale
+
+### Graph Databases (Neo4j, Amazon Neptune)
+
+**Data model:** Nodes (entities) and Edges (relationships).
+
+```
+(Alice)-[:FRIENDS_WITH]->(Bob)
+(Bob)-[:WORKS_AT]->(Google)
+(Alice)-[:WORKS_AT]->(Meta)
+```
+
+**Query (Cypher):**
+
+```cypher
+// Find friends of friends who work at Google
+MATCH (me:Person)-[:FRIENDS_WITH]->(friend)-[:FRIENDS_WITH]->(fof)
+WHERE me.name = 'Alice' AND fof.works_at = 'Google'
+RETURN fof
+```
+
+**Best for:**
+
+- Social networks (friends, followers)
+- Recommendation engines
+- Fraud detection
+- Knowledge graphs
+
+### Time-Series Databases (InfluxDB, TimescaleDB)
+
+**Data model:** Optimized for time-stamped data.
+
+```
+metric: cpu_usage
+tags: { host: "server1", region: "us-east" }
+fields: { value: 75.5 }
+timestamp: 2026-06-14T10:30:00Z
+```
+
+**Best for:**
+
+- Monitoring and metrics
+- IoT sensor data
+- Financial market data
+- Application performance monitoring
+
+### When to Use SQL vs NoSQL
+
+| Factor | SQL | NoSQL |
+| --- | --- | --- |
+| **Data structure** | Structured, relational | Flexible, varied |
+| **Schema** | Fixed, predefined | Dynamic, schema-less |
+| **Scaling** | Vertical (bigger server) | Horizontal (more nodes) |
+| **Transactions** | Full ACID | Varies (some support single-doc ACID) |
+| **Query complexity** | Complex joins, aggregations | Simple lookups, specific patterns |
+| **Consistency** | Strong consistency | Eventual consistency (usually) |
+| **Best for** | Financial, e-commerce, booking | Social feeds, IoT, logging, caching |
+
+**Decision framework:**
+
+1. Does your data have relationships? → SQL
+2. Do you need ACID transactions? → SQL
+3. Do you need complex queries/ad-hoc reporting? → SQL
+4. Do you need massive write throughput? → NoSQL
+5. Does your schema evolve frequently? → NoSQL
+6. Do you need horizontal scaling from day one? → NoSQL
+
+**Real-world examples:**
+
+- **Instagram:** PostgreSQL for users/relationships (strong consistency) + Cassandra for activity feeds (write-heavy)
+- **Discord:** Migrated from MongoDB to Cassandra for message storage (time-series, append-only)
+- **Netflix:** Cassandra for viewing history, MySQL for billing
+
+---
+
+## 1.2.3 Database Internals
+
+Understanding how databases work under the hood helps you make better design decisions.
+
+These are internal database engine concepts — the stuff that makes databases fast and reliable under the hood.
+
+Think of it like this:
+
+```
+SQL query → Query Planner → Buffer Pool → Index/Storage Engine → Disk
+                                      ↑
+                                    WAL
+```
+
+Let's go one by one.
+
+### 1. LSM Trees (Log-Structured Merge Trees)
+
+LSM Trees are used in write-heavy databases.
+
+**Examples:**
+
+- Apache Cassandra
+- RocksDB
+- LevelDB
+
+**Why LSM Trees Exist:**
+
+Normal databases (like B-Tree DBs) update data in-place on disk.
+
+**Problem:** Disk random writes are expensive.
+
+Example:
+
+```sql
+UPDATE users SET name = 'Rahul' WHERE id = 10;
+```
+
+In B-tree: DB may jump to random disk location. This is Random I/O ❌ — Slow.
+
+LSM says: Don't update disk immediately. Write sequentially first.
+
+#### How LSM Tree Works
+
+**Step 1: Write goes to MemTable (RAM)**
+
+```sql
+INSERT INTO users VALUES(1, 'Rahul');
+```
+
+Instead of disk: DB writes to MemTable (in memory). Very fast.
+
+Think: RAM write = super fast
+
+**Step 2: Also Write to WAL**
+
+Before RAM: write to Write Ahead Log (on disk).
+
+Why? RAM can crash. We'll discuss WAL later.
+
+**Step 3: MemTable Full → Flush to Disk**
+
+When memtable becomes large: DB writes it to disk. But importantly: Sequential write, not random.
+
+Stored as: SSTable (Sorted String Table)
+
+Example:
+
+```
+users_1.sstable
+1 → Rahul
+2 → Amit
+5 → Priya
+10 → Alice
+```
+
+Sorted file.
+
+**Step 4: More Writes Create More SSTables**
+
+Over time:
+
+```
+SSTable1
+SSTable2
+SSTable3
+```
+
+Data scattered. Example:
+
+```
+SSTable1: user=1 Rahul
+SSTable2: user=1 Rahul Sharma
+```
+
+Newest data in latest table.
+
+**Step 5: Compaction (Merge Process)**
+
+Background process merges files.
+
+Before:
+
+```
+SSTable1: 1 → Rahul
+SSTable2: 1 → Rahul Sharma
+```
+
+After merge:
+
+```
+SSTable_final: 1 → Rahul Sharma
+```
+
+Old version removed. Called: Compaction
+
+#### Read Flow in LSM
+
+When query comes:
+
+```sql
+SELECT * FROM users WHERE id = 1;
+```
+
+DB checks:
+
+1. MemTable (Fastest)
+2. Recent SSTable
+3. Older SSTables
+
+Eventually found.
+
+**Why Reads Slower?**
+
+Because data may exist in multiple files. Need multiple checks. This is called: Read amplification
+
+**Why Writes Faster?**
+
+Because writes are Sequential. Sequential disk I/O is very fast. No random update.
+
+#### Tradeoffs
+
+**Pros:**
+
+- ✅ Extremely fast writes
+- ✅ Good for massive scale
+- ✅ Good for event streams/logs
+
+**Cons:**
+
+- ❌ Slower reads
+- ❌ Compaction expensive
+- ❌ Write amplification
+
+**Write Amplification Meaning:**
+
+Same data rewritten many times.
+
+Example:
+
+- Write once → SSTable1
+- Compaction → rewrite
+- Another compaction → rewrite
+
+1 write becomes: 5–10 actual writes
+
+#### Real World Use
+
+**Write Heavy Systems:**
+
+- Chat messages
+- Logs
+- Metrics
+- Analytics
+- IoT events
+
+Why? Lots of inserts. Few updates.
+
+**Example:** WhatsApp messages: Millions/sec. LSM-style DB good.
+
+---
+
+### 2. Write Ahead Log (WAL)
+
+WAL exists for: Durability (Remember ACID?)
+
+**Problem Without WAL:**
+
+Suppose:
+
+```sql
+UPDATE balance SET amount = amount - 1000;
+```
+
+DB updates RAM. Suddenly: Power failure ⚡ RAM gone. Money lost. Very dangerous.
+
+**WAL Solution:**
+
+Before doing anything: DB first writes "I am about to do X" to disk log.
+
+#### Flow
+
+**Step 1:** Transaction starts.
+
+**Step 2:** Write operation to WAL.
+
+Example:
+
+```sql
+UPDATE users SET name='Rahul' WHERE id=1;
+```
+
+Saved in: wal.log. Sequential write. Fast.
+
+**Step 3:** Actual DB files updated.
+
+**Step 4:** Commit success.
+
+#### Crash Scenario
+
+Suppose:
+
+- WAL written ✅
+- DB file update ❌
+- Crash ⚡
+
+After restart: DB checks WAL: "Oh, unfinished work exists" → Replays log → Recovery.
+
+This is: Crash Recovery
+
+#### Why Sequential Writes Matter
+
+Disk:
+
+- Random write: Slow ❌
+- Sequential append: Fast ✅
+
+WAL always appends: END OF FILE. Super efficient.
+
+#### WAL Also Helps Replication
+
+Primary DB: Writes WAL.
+
+Replica: Reads WAL stream. Copies same operations.
+
+This powers replication in: PostgreSQL, MySQL
+
+#### Point-in-Time Recovery
+
+Suppose DB corrupted at: 2:00 PM
+
+Restore backup from: 1:50 PM
+
+Replay WAL until: 1:59:59
+
+Recover almost everything.
+
+---
+
+### 3. Buffer Pool
+
+This is: Database RAM cache. Super important for performance.
+
+**Why Needed?**
+
+Disk is slow. RAM is fast.
+
+Approx:
+
+- RAM → nanoseconds
+- SSD → micro/milliseconds
+
+Huge difference.
+
+**Without Buffer Pool:**
+
+Every query:
+
+```sql
+SELECT * FROM users WHERE id=10;
+```
+
+Would hit disk. Very slow.
+
+**With Buffer Pool:**
+
+Step 1: First read: Disk → RAM. Stored in buffer pool.
+
+Step 2: Future reads: RAM hit ✅. Much faster.
+
+**Example:** Instagram profile. User opens profile repeatedly.
+
+Without buffer pool: Disk every time ❌ With buffer pool: Memory cache ✅
+
+#### Dirty Pages
+
+Suppose update:
+
+```sql
+UPDATE users SET age = 24;
+```
+
+DB changes memory page. Not immediately disk. Called: Dirty Page.
+
+Later: Background flush to disk.
+
+#### Why Important?
+
+DB performance often depends on: Cache hit ratio
+
+High hit ratio: Fast DB ✅
+
+Low hit ratio: Too many disk reads ❌
+
+**Example:**
+
+- DB size: 100GB
+- Buffer pool: 64GB
+
+Hot data stays in RAM. Very fast.
+
+---
+
+### 4. Query Planner & Optimizer
+
+This is DB brain.
+
+When SQL arrives: DB asks: "What is the fastest way to run this?"
+
+Example:
+
+```sql
+SELECT * FROM users WHERE email='abc@gmail.com';
+```
+
+DB doesn't blindly run query.
+
+**Step 1: Parse SQL**
+
+Convert into: Abstract Syntax Tree (AST). Like compiler parsing code.
+
+**Step 2: Generate Plans**
+
+Possible ways:
+
+- Plan A: Full table scan (Scan 10M rows)
+- Plan B: Use index (Jump directly)
+
+**Step 3: Cost Estimation**
+
+DB estimates which is cheaper. Based on: table size, index selectivity, row count, statistics.
+
+**Example:**
+
+```sql
+SELECT * FROM users WHERE country='India';
+```
+
+Suppose: 90% rows = India. Even if index exists: DB may do Full scan because index not useful.
+
+**Step 4: Execute Best Plan**
+
+Chosen plan runs.
+
+**EXPLAIN** shows planner decision.
+
+```sql
+EXPLAIN SELECT * FROM users WHERE email='abc@gmail.com';
+```
+
+Output:
+
+- Good: Index Scan
+- Bad: Seq Scan (Means: Scanning whole table)
+
+#### Big Picture
+
+When query happens:
+
+1. Query Planner decides path
+2. Buffer pool checked
+3. Index/LSM searched
+4. WAL ensures durability
+5. Result returned
+
+**Easy memory trick:**
+
+- LSM → write optimization
+- WAL → crash safety
+- Buffer Pool → RAM speed
+- Optimizer → smart execution
+
+---

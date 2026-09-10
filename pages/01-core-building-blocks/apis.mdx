@@ -1,0 +1,1933 @@
+---
+title: APIs — REST, GraphQL, gRPC, Gateway & Design Patterns
+---
+
+import { Callout } from 'nextra/components'
+
+# 1.1 APIs
+
+> An API (Application Programming Interface) is a contract between two software systems that defines how they communicate. In system design, APIs are the primary interface between clients (mobile apps, web browsers, third-party services) and your backend services. Every system design interview expects you to design clean, well-structured APIs.
+
+## 1.1.0 HTTP Fundamentals (Prerequisite)
+
+Before diving into APIs, you must understand HTTP — the protocol that underpins all web communication.
+
+### What is HTTP?
+
+HTTP (HyperText Transfer Protocol) is a stateless, application-layer protocol used to transfer hypertext over the Web. It has been the most widely used protocol for data transfer on the Web since its inception.
+
+**HTTP defines:**
+
+- How requests are formatted
+- How responses are formatted
+- Status codes (200, 404, 500, etc.)
+- Headers
+- Methods (GET, POST, PUT, DELETE, ...)
+
+**Key characteristics:**
+
+- **Stateless:** HTTP does not retain session information between requests. The connection between the web browser and the server ends after the transaction is finished. This limits its ability to handle complex client-server interactions without additional mechanisms like cookies or sessions.
+- **Application-layer protocol:** Operates at Layer 7 of the OSI model
+- **Plain text (HTTP):** Hyper-text exchanged using HTTP goes as plain text, which makes it less secure. Use HTTPS for security.
+- **Client-server model:** The web server delivers data to the user in the form of web pages when the user initiates an HTTP request.
+
+### HTTP Evolution
+
+#### HTTP/1.0 (1996)
+
+Added foundational features:
+
+- Headers
+- Status codes
+- Content types
+
+```
+GET /index.html HTTP/1.0
+```
+
+**Problem:** 1 request = 1 TCP connection. Every request required opening a new connection.
+
+#### HTTP/1.1 (1997)
+
+Huge improvement — became the dominant web protocol for many years.
+
+Added:
+
+- **Persistent connections (Keep-Alive)** — Reuse TCP connection for multiple requests
+- **Host header** — Required header identifying the target domain
+- **Better caching** — Cache-Control headers
+- **Pipelining** — Send multiple requests without waiting for responses
+
+```
+Connection: keep-alive
+```
+
+**Before:** Page with 50 images = 50 TCP connections **After:** One connection = Many requests
+
+#### HTTP/2 (2015)
+
+Major redesign. Still uses the same HTTP concepts (GET, POST, headers, status codes) but changes how data is transmitted.
+
+**Key improvement: Multiplexing**
+
+```
+HTTP/1.1 (sequential):
+Request A → Wait → Response A
+Request B → Wait → Response B
+
+HTTP/2 (parallel):
+Request A → Request B → Request C
+Responses can arrive interleaved on one connection
+```
+
+Many requests share one connection. Responses can arrive in any order.
+
+#### Why HTTPS over HTTP?
+
+1. **Security:** HTTPS is like sending your message in a locked box that only the receiver can open. This keeps sensitive information, like passwords or credit card numbers, safe from hackers.
+
+2. **Trust & Authority:** Web browsers show a padlock icon for HTTPS websites. People trust these sites more, and search engines also rank them higher.
+
+3. **Speed & Better Tracking:** HTTPS websites load faster than HTTP. Also helps website owners see where their visitors come from (like social media or ads) more accurately.
+
+### HTTP Request Anatomy
+
+A complete HTTP request consists of: Method, URI, HTTP version, Headers, and optional Body.
+
+**Example PUT request:**
+
+```
+PUT /api/users/12345 HTTP/1.1
+Host: example.com
+User-Agent: Mozilla/5.0 ...
+Content-Type: application/json
+Content-Length: 123
+Authorization: Bearer eyJ...
+Accept: application/json
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+Referer: https://example.com/dashboard
+Cookie: sessionId=abc123
+(blank line)
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john.doe@example.com",
+  "age": 30
+}
+```
+
+**Request breakdown:**
+
+| Part | Example | Purpose |
+| --- | --- | --- |
+| Method | PUT | HTTP method (Update data) |
+| URI | /api/users/12345 | Resource/Endpoint |
+| HTTP Version | HTTP/1.1 | Protocol version |
+| Host Header | Host: example.com | Required in HTTP/1.1. Identifies the target domain |
+| User-Agent | User-Agent: Mozilla/5.0 ... | Identifies the client (Chrome, Firefox, Mobile App, Postman) |
+| Content-Type | Content-Type: application/json | Tells server the format of request body |
+| Content-Length | Content-Length: 123 | Number of bytes in request body |
+| Authorization | Authorization: Bearer eyJ... | Authentication token |
+| Accept | Accept: application/json | Client says: "I want response in JSON format" |
+| Accept-Encoding | Accept-Encoding: gzip, deflate | Client supports compressed responses (smaller payload, faster transfer) |
+| Connection | Connection: keep-alive | Do not close TCP connection after request (introduced in HTTP/1.1) |
+| Referer | Referer: https://example.com/dashboard | Tells server where request originated |
+| Cookie | Cookie: sessionId=abc123 | Stores session information (login state, shopping cart, preferences) |
+| Blank Line |  | Very important. Separates Headers FROM Body |
+| Request Body | `{ "firstName": "John", ... }` | Actual data being sent to server |
+
+### HTTP Response Anatomy
+
+After processing the request, the server responds.
+
+**Example response:**
+
+```
+HTTP/1.1 200 OK
+Date: Fri, 20 Sep 2024 ...
+Content-Type: application/json
+Content-Length: 85
+Server: Apache/2.4.41
+Cache-Control: no-store
+X-Request-ID: abcdef123456
+Strict-Transport-Security: max-age=31536000
+Set-Cookie: sessionId=...
+Vary: Accept-Encoding
+Connection: keep-alive
+{
+  "message": "User updated successfully",
+  "userId": 12345,
+  "status": "success"
+}
+```
+
+**Response breakdown:**
+
+| Part | Example | Purpose |
+| --- | --- | --- |
+| Status Line | HTTP/1.1 200 OK | Protocol version + Status code + Status text |
+| Date | Date: Fri, 20 Sep 2024 ... | Time server generated response |
+| Content-Type | Content-Type: application/json | Response body format |
+| Content-Length | Content-Length: 85 | Response size in bytes |
+| Server | Server: Apache/2.4.41 | Server software (Apache, Nginx, IIS) |
+| Cache-Control | Cache-Control: no-store | Prevent caching. Browser must fetch fresh data next time |
+| X-Request-ID | X-Request-ID: abcdef123456 | Unique request identifier for logging, debugging, tracing |
+| HSTS | Strict-Transport-Security: ... | Forces browser to use HTTPS only. Improves security |
+| Set-Cookie | Set-Cookie: sessionId=... | Server sends cookie to browser. Future requests automatically include it |
+| Vary | Vary: Accept-Encoding | Caching behavior depends on compression type |
+| Connection | Connection: keep-alive | Keep TCP connection open |
+| Response Body | `{ "message": "User updated successfully" }` | Server result |
+
+### HTTP Methods Deep Dive
+
+| Method | Purpose | Idempotent | Safe | Request Body | Typical Response |
+| --- | --- | --- | --- | --- | --- |
+| GET | Retrieve data | Yes | Yes | No | 200 OK |
+| POST | Create new data | No | No | Yes | 201 Created + Location header |
+| PUT | Update/replace entire resource | Yes | No | Yes | 200 OK or 204 No Content |
+| PATCH | Partial update | Yes\* | No | Yes | 200 OK or 204 No Content |
+| DELETE | Remove data | Yes | No | No | 204 No Content |
+| OPTIONS | Ask server about allowed methods | Yes | Yes | No | 204 No Content with Allow header |
+| HEAD | Like GET but no body | Yes | Yes | No | 200 OK (headers only) |
+
+\*PATCH is idempotent if the patch operations are idempotent.
+
+**Restaurant analogy:**
+
+- Client (your app/browser) = customer
+- API = waiter
+- Server = kitchen
+- Data = food
+
+The client sends a request, the API delivers it to the server, and the server returns a response.
+
+### OPTIONS Method and CORS Preflight
+
+OPTIONS is an HTTP method used to ask a server: "Before I send my real request, what are you willing to accept?"
+
+It doesn't fetch data. It doesn't update data. It just asks about the server's capabilities.
+
+**Why does OPTIONS exist?** Because browsers enforce the Same-Origin Policy.
+
+**When does the browser send OPTIONS first?** A preflight request happens when ANY of these are true:
+
+1. **Non-simple method:** PUT, DELETE, PATCH
+2. **Custom Headers:** Authorization, X-API-Key
+3. **JSON Content Type:** Content-Type: application/json (this alone triggers preflight)
+
+**Real example:** React app wants to update a user:
+
+```
+Actual request:
+PUT /users/123
+Content-Type: application/json
+Authorization: Bearer xyz
+
+Browser sees:
+- Cross-origin? Yes
+- PUT? Yes
+- Authorization header? Yes
+- application/json? Yes
+
+Browser says: "Hold on. First I need permission."
+```
+
+**Step 1: Browser sends OPTIONS (preflight):**
+
+```
+OPTIONS /users/123 HTTP/1.1
+Origin: https://app.example.com
+Access-Control-Request-Method: PUT
+Access-Control-Request-Headers: Authorization, Content-Type
+```
+
+Meaning: "I want to make a PUT request. I want to send Authorization and Content-Type. Is that okay?"
+
+**Step 2: Server responds:**
+
+```
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE
+Access-Control-Allow-Headers: Authorization, Content-Type
+Access-Control-Max-Age: 86400
+```
+
+Meaning: "Yes. PUT is allowed. Authorization is allowed. Content-Type is allowed. Cache this answer for 24 hours."
+
+### HTTP Status Codes — Complete Reference
+
+HTTP status codes are 3-digit numbers sent by the server to tell the client what happened to a request.
+
+**The first digit tells you the category:**
+
+| Range | Meaning |
+| --- | --- |
+| 1xx | Information |
+| 2xx | Success |
+| 3xx | Redirection |
+| 4xx | Client Error |
+| 5xx | Server Error |
+
+#### 1xx — Informational
+
+Rarely seen in normal API development. They mean: "The request is being processed."
+
+**100 Continue:**
+
+```
+Client: POST /upload
+Server: 100 Continue
+Meaning: "Headers look good. Send the request body."
+```
+
+Used mainly for large uploads.
+
+**101 Switching Protocols:**
+
+```
+Client: Upgrade: websocket
+Server: 101 Switching Protocols
+Meaning: "We're switching from HTTP to WebSocket."
+```
+
+#### 2xx — Success
+
+The request succeeded. These are the most common codes you'll return from APIs.
+
+**200 OK**:Most common status code.
+
+```
+GET /users/123
+Response: 200 OK
+{ "id": 123, "name": "John" }
+```
+
+**201 Created**:Used when a new resource is created.
+
+```
+POST /users
+Response: 201 Created
+{ "id": 124, "name": "John" }
+```
+
+**204 No Content**:Request succeeded. Nothing to return.
+
+```
+DELETE /users/123
+Response: 204 No Content
+Meaning: User deleted successfully. No response body.
+```
+
+Also commonly used for OPTIONS preflight requests.
+
+#### 3xx — Redirection
+
+These tell the client: "The resource is somewhere else."
+
+**301 Moved Permanently:**
+
+```
+Old URL: /users
+New URL: /people
+Response: 301 Moved Permanently
+Location: /people
+Meaning: Use the new URL forever.
+```
+
+**302 Found (Temporary Redirect)**:Meaning: Use another URL for now. Later the original URL may come back.
+
+**304 Not Modified**:Very important for caching.
+
+```
+Browser: GET /profile
+Server checks cache metadata and responds:
+304 Not Modified
+Meaning: Use your cached copy. Nothing changed. No response body is sent. Saves bandwidth.
+```
+
+#### 4xx — Client Errors
+
+These mean: The client did something wrong. The server is working fine.
+
+**400 Bad Request**:Request format is invalid.
+
+```
+{ "email": 123 }  // Server expected string, got number
+Response: 400 Bad Request
+Meaning: Your request data is invalid.
+```
+
+**401 Unauthorized**:Authentication failed.
+
+```
+GET /profile (without token)
+Response: 401 Unauthorized
+Meaning: Login required.
+```
+
+Easy way to remember: **401 = Who are you?**
+
+**403 Forbidden**:You are authenticated, but you don't have permission.
+
+```
+User A tries to delete User B's account.
+Response: 403 Forbidden
+Meaning: I know who you are. You're not allowed.
+```
+
+Easy way to remember: **401 = Not logged in. 403 = Logged in but not allowed.**
+
+**404 Not Found**:Most famous HTTP code.
+
+```
+GET /users/99999 (user doesn't exist)
+Response: 404 Not Found
+Meaning: Resource not found.
+```
+
+**405 Method Not Allowed:**
+
+```
+Endpoint supports: GET /users
+Client sends: PUT /users
+Response: 405 Method Not Allowed
+Meaning: Wrong HTTP method.
+```
+
+**409 Conflict**:Request conflicts with existing data.
+
+```
+Creating a folder: { "name": "Projects" }
+But folder already exists.
+Response: 409 Conflict
+Meaning: This resource already exists.
+```
+
+**429 Too Many Requests**:Rate limiting.
+
+```
+Server allows: 100 requests/minute
+Client sends: 1000 requests/minute
+Response: 429 Too Many Requests
+Meaning: Slow down.
+```
+
+#### 5xx — Server Errors
+
+These mean: Client request was fine. Server failed.
+
+**500 Internal Server Error**:Most common server error.
+
+```
+database.connect() → Database crashes
+Response: 500 Internal Server Error
+Meaning: Something unexpected broke.
+```
+
+**501 Not Implemented:**
+
+```
+Client sends: PATCH /users
+Server doesn't support PATCH.
+Response: 501 Not Implemented
+Meaning: Feature not built yet.
+```
+
+**502 Bad Gateway**:Common with Nginx, API Gateway, Load Balancers.
+
+```
+Client → Nginx → Backend
+Backend returns invalid response.
+Nginx responds: 502 Bad Gateway
+Meaning: Upstream server responded incorrectly.
+```
+
+**503 Service Unavailable**:Server temporarily unavailable (maintenance, high traffic, deployment).
+
+```
+Response: 503 Service Unavailable
+Meaning: Try again later.
+```
+
+**504 Gateway Timeout**:Proxy waited too long.
+
+```
+Client → Nginx → Backend
+Backend takes 60 seconds. Nginx timeout is 30 seconds.
+Response: 504 Gateway Timeout
+Meaning: Backend didn't respond in time.
+```
+
+### HTTP Caching
+
+HTTP caching is one of the most important concepts for improving web application performance.
+
+**The main idea:** If data hasn't changed, don't download it again.
+
+**Why do we need caching?**
+
+```
+Without caching:
+Refresh Page → Download Again
+Refresh Again → Download Again
+Refresh Again → Download Again
+This wastes: Network bandwidth, Server resources, User time
+```
+
+**Basic flow:**
+
+```
+First Request:
+Browser: GET /profile
+Server: HTTP/1.1 200 OK, { "name": "John" }
+Browser stores the response.
+
+Second Request:
+Instead of downloading again, browser asks: "Has this resource changed?"
+If not: 304 Not Modified. Browser uses cached copy.
+```
+
+#### Cache-Control Header
+
+Tells the browser: "How long can you keep this response?"
+
+```
+Cache-Control: max-age=60
+Meaning: Keep this response for 60 seconds.
+For the next 60 seconds, browser uses local cache. No network request.
+```
+
+**Common Cache-Control values:**
+
+| Value | Meaning | Use Case |
+| --- | --- | --- |
+| max-age=3600 | Cache for 1 hour | Static assets |
+| no-cache | May store, but verify with server before using | Semi-dynamic content |
+| no-store | Never cache this | Banking, sensitive data, auth responses |
+
+#### ETag (Entity Tag)
+
+Think of it as a fingerprint or version number of the resource.
+
+```
+ETag: "abc123"
+Server says: Current version = abc123
+```
+
+**Flow:**
+
+```
+First Request:
+Browser: GET /profile
+Server: 200 OK, ETag: "abc123"
+Browser stores: Profile Data + ETag = abc123
+
+Second Request:
+Browser: GET /profile, If-None-Match: "abc123"
+Meaning: My cached version is abc123. Has it changed?
+
+Resource Not Changed:
+Server: 304 Not Modified
+Meaning: No changes. Use your cached copy. No response body sent.
+
+Resource Changed:
+New ETag: "xyz999"
+Server: 200 OK, { "name": "John Updated" }
+Browser replaces old cache.
+```
+
+**Why ETag is powerful:** Without ETag, download entire file. With ETag, compare version only. If unchanged, send tiny 304 response. Huge bandwidth savings.
+
+#### Last-Modified
+
+Instead of a version hash, server stores a timestamp.
+
+```
+Last-Modified: Mon, 01 Jan 2025 10:00:00 GMT
+```
+
+Next request:
+
+```
+If-Modified-Since: Mon, 01 Jan 2025 10:00:00 GMT
+Meaning: Has it changed after this time?
+```
+
+**ETag vs Last-Modified:**
+
+| ETag | Last-Modified |
+| --- | --- |
+| Version based | Time based |
+| More accurate | Less accurate |
+| Detects any change | Depends on timestamp |
+| Preferred today | Still common |
+
+**Complete real example:**
+
+```
+First Request:
+Browser: GET /users/1
+Server: HTTP/1.1 200 OK
+        Cache-Control: no-cache
+        ETag: "abc123"
+        Last-Modified: Mon, 01 Jan 2025 10:00:00 GMT
+        { "id": 1, "name": "John" }
+
+Second Request:
+Browser: GET /users/1
+        If-None-Match: "abc123"
+        If-Modified-Since: Mon, 01 Jan 2025 10:00:00 GMT
+
+Server checks: ETag same? Yes. Modified after timestamp? No.
+Server responds: 304 Not Modified (no body)
+Browser uses cache.
+```
+
+**Where is cache stored?**
+
+- **Browser Cache:** Chrome, Firefox, Safari (most common)
+- **CDN Cache:** Cloudflare, Akamai (stores copies closer to users)
+- **Reverse Proxy Cache:** Nginx, Varnish (caches responses before they hit your application)
+- **Modern Frontend Caching:** TanStack Query, SWR (client-side caching with more control over refetch intervals, background updates, cache invalidation)
+
+### Persistent Connections & Keep-Alive
+
+In HTTP/1.0, every request required a new TCP connection:
+
+```
+Browser → Request → Server
+Browser ← Response ← Server
+Connection Closed
+```
+
+Page with 50 images = 50 TCP connections. This was slow.
+
+**Keep-Alive (HTTP/1.1):**
+
+```
+Browser → Request 1 → Server
+Browser ← Response 1 ← Server
+Browser → Request 2 → Server
+Browser ← Response 2 ← Server
+Browser → Request 3 → Server
+Browser ← Response 3 ← Server
+(All requests use the same TCP connection)
+```
+
+```
+Connection: keep-alive
+Meaning: "Don't close the connection after this response. Keep it open for future requests."
+```
+
+**HTTP/1.0 vs HTTP/1.1:**
+
+- HTTP/1.0: Default behavior = Connection: close (every request opens new connection)
+- HTTP/1.1: Persistent connections are default. Connection: keep-alive is often implied even if not explicitly sent.
+
+**Benefits of Keep-Alive:**
+
+1. Reduced Latency — No need to repeatedly establish TCP connections
+2. Better Performance — Web pages load faster
+3. Lower Server Load — Fewer TCP handshakes
+4. Efficient Resource Usage — One connection handles many requests
+
+**Connection: close:** If either client or server sends this, it means: "After this response, close the TCP connection."
+
+**HTTP/2 improvement:** HTTP/1.1 reused a connection but requests were still somewhat sequential. HTTP/2 introduced multiplexing where multiple requests/responses can interleave on one connection, making communication much faster.
+
+### HTTP Content Negotiation
+
+The client tells the server what format it prefers, and the server tries to respond in that format.
+
+**How it works:** The client sends special HTTP headers. The server reads them and decides how to respond.
+
+**Main headers:**
+
+| Header | Sent By | Meaning |
+| --- | --- | --- |
+| Accept | Client | What format I want (JSON, XML, etc.) |
+| Accept-Language | Client | What language I prefer |
+| Accept-Encoding | Client | What compression I support |
+| Content-Type | Server | What format I'm sending |
+
+**Examples:**
+
+```
+Client:
+GET /users
+Accept: application/json
+Meaning: I want JSON.
+
+OR:
+GET /users
+Accept: application/xml
+Meaning: I want XML.
+```
+
+**Real browser example:**
+
+```
+Accept-Language: en-US,en;q=0.9
+Meaning: English (US) preferred. English acceptable.
+```
+
+**Encoding negotiation (compression):**
+
+```
+Accept-Encoding: gzip, br
+Meaning: I support gzip and brotli compression.
+
+Without compression: Response Size = 26 MB
+With gzip: Response Size = 3.8 MB (Much faster!)
+```
+
+### REST API — Quick Reference
+
+A REST API (Representational State Transfer Application Programming Interface) is a way for different software applications to communicate over the internet using standard HTTP methods.
+
+**Key Characteristics:**
+
+1. **Stateless** – Each request contains all the information needed to process it
+2. **Client-Server Architecture** – Client and server are separate
+3. **Uses Standard HTTP** – Works with URLs, HTTP methods, headers, and status codes
+4. **Resource-Based** – Everything is treated as a resource (users, products, orders, etc.)
+
+**Example:**
+
+```
+Request: GET /users/123
+Response: { "id": 123, "name": "John Doe", "email": "john@example.com" }
+```
+
+Here: GET asks for information. /users/123 identifies the specific user. The server returns the user data in JSON format.
+
+**Real-world examples:**
+
+- Open a weather app → it calls a weather REST API
+- Log into a website → it may use an authentication REST API
+- View products on an online store → the app requests product data from a REST API
+
+---
+
+## 1.1.1 REST API Design
+
+REST (Representational State Transfer) is an architectural style for designing networked applications. It uses standard HTTP methods to manipulate resources identified by URLs. REST is the most widely adopted API paradigm — it powers the majority of public APIs and is the default choice for most system design interviews.
+
+### Core Principles
+
+1. **Statelessness**: Every request must contain all the information needed to process it. The server holds no session state between calls. This enables horizontal scaling, caching, and resilience.
+
+2. **Client-Server Separation**: The client and server are independent. The client handles the UI, the server handles data storage and business logic. They communicate only through APIs.
+
+3. **Cacheability**: Responses must define themselves as cacheable or not. Caching improves performance but must be managed carefully to avoid stale data.
+
+4. **Uniform Interface**: A consistent way to interact with resources across the entire API. This includes:
+
+   - Resource identification (URIs)
+   - Resource manipulation through representations (JSON, XML)
+   - Self-descriptive messages
+   - HATEOAS (Hypermedia as the Engine of Application State)
+
+5. **Layered System**: The client cannot ordinarily tell whether it is connected directly to the end server, or to an intermediary (load balancer, proxy, CDN) along the way.
+
+## URI (Uniform Resource Identifier)
+
+A string that identifies a resource.
+
+Examples:
+
+```
+/users/123
+```
+
+```
+urn:isbn:9780132350884
+```
+
+```
+https://example.com/users/123
+```
+
+## URL (Uniform Resource Locator)
+
+A type of URI that tells:
+
+- where the resource is
+- how to access it
+
+Example:
+
+```
+https://example.com/users/123
+```
+
+Breakdown:
+
+```
+https://example.com/users/123
+│      │           │
+│      │           └─ Path
+│      └──────────── Domain
+└────────────────── Protocol
+```
+
+This tells you exactly where the resource lives.
+
+All URLs are URIs.
+
+Not all URIs are URLs.
+
+### Resource Naming Conventions
+
+Resources are nouns, not verbs. The HTTP method defines the action.
+
+**Good examples:**
+
+```
+GET    /users              → List all users
+GET    /users/42           → Get user 42
+POST   /users              → Create a new user
+PUT    /users/42           → Replace user 42
+PATCH  /users/42           → Partially update user 42
+DELETE /users/42           → Delete user 42
+```
+
+**Bad examples:**
+
+```
+GET    /getUsers           → Verb in URI (redundant)
+POST   /createUser         → Verb in URI
+DELETE /deleteUser/42      → Verb in URI
+```
+
+**Nested resources (max 2 levels):**
+
+```
+GET /users/42/orders              → Orders for user 42
+GET /users/42/orders/7            → Order 7 for user 42
+GET /users/42/orders/7/items      → Items in order 7 for user 42
+```
+
+**Plural nouns:** Always use plural (`/users`, not `/user`).
+
+### HTTP Methods and Idempotency
+
+| Method | Purpose | Idempotent | Safe | Typical Response |
+| --- | --- | --- | --- | --- |
+| GET | Retrieve resource | Yes | Yes | 200 OK |
+| POST | Create resource | No | No | 201 Created + Location header |
+| PUT | Replace entire resource | Yes | No | 200 OK or 204 No Content |
+| PATCH | Partial update | Yes\* | No | 200 OK or 204 No Content |
+| DELETE | Remove resource | Yes | No | 204 No Content |
+
+\*PATCH is idempotent if the patch operations are idempotent.
+
+**Idempotency definition:** An operation is idempotent if running it multiple times produces the same result as running it once.
+
+**Why idempotency matters:** In distributed systems, requests may be retried. If a POST request is retried, it might create duplicate resources. Idempotency keys solve this — a unique key attached to each request that the server uses to detect and prevent duplicate processing.
+
+### HTTP Status Codes for APIs
+
+HTTP status codes are 3-digit numbers sent by the server to tell the client what happened to a request. The first digit tells you the category:
+
+| Range | Meaning |
+| --- | --- |
+| 1xx | Information |
+| 2xx | Success |
+| 3xx | Redirection |
+| 4xx | Client Error |
+| 5xx | Server Error |
+
+#### 1xx — Informational
+
+Rarely seen in normal API development. They mean: "The request is being processed."
+
+| Code | Meaning | Use Case |
+| --- | --- | --- |
+| 100 Continue | Headers look good, send the body | Large uploads |
+| 101 Switching Protocols | Switching from HTTP to WebSocket | WebSocket upgrade |
+
+#### 2xx — Success
+
+The request succeeded. These are the most common codes you'll return from APIs.
+
+| Code | Meaning | When to Use |
+| --- | --- | --- |
+| 200 OK | Request succeeded | GET, PUT, PATCH success |
+| 201 Created | Resource created successfully | POST success. Include `Location` header |
+| 202 Accepted | Request accepted for processing | Async operations (not yet complete) |
+| 204 No Content | Success, no response body | DELETE success, OPTIONS preflight |
+
+**Example 201 response:**
+
+```
+HTTP/1.1 201 Created
+Location: /users/124
+{ "id": 124, "name": "John" }
+```
+
+#### 3xx — Redirection
+
+These tell the client: "The resource is somewhere else."
+
+| Code | Meaning | When to Use |
+| --- | --- | --- |
+| 301 Moved Permanently | Resource moved permanently | URL change (permanent) |
+| 302 Found | Temporary redirect | URL change (temporary) |
+| 304 Not Modified | Use cached copy | Caching (no body sent) |
+
+**304 is critical for caching:**
+
+```
+Browser: GET /profile
+Server: 304 Not Modified
+Meaning: Use your cached copy. Nothing changed. Saves bandwidth.
+```
+
+#### 4xx — Client Errors
+
+These mean: The client did something wrong. The server is working fine.
+
+| Code | Meaning | When to Use | Memory Trick |
+| --- | --- | --- | --- |
+| 400 Bad Request | Malformed request | Invalid JSON, missing fields |  |
+| 401 Unauthorized | Authentication required | Missing or invalid token | **401 = Who are you?** |
+| 403 Forbidden | Authenticated but not authorized | User lacks permission | **403 = Logged in but not allowed** |
+| 404 Not Found | Resource doesn't exist | Invalid ID, deleted resource |  |
+| 405 Method Not Allowed | Wrong HTTP method | POST to GET-only endpoint |  |
+| 409 Conflict | Conflict with existing state | Duplicate email, name collision |  |
+| 422 Unprocessable Entity | Validation errors | Valid JSON, invalid data |  |
+| 429 Too Many Requests | Rate limit exceeded | Too many requests per minute |  |
+
+**Key distinction: 401 vs 403**
+
+- 401 = Not logged in (no token or invalid token)
+- 403 = Logged in but not allowed (insufficient permissions)
+
+#### 5xx — Server Errors
+
+These mean: Client request was fine. Server failed.
+
+| Code | Meaning | When to Use |
+| --- | --- | --- |
+| 500 Internal Server Error | Unexpected server failure | Database crash, unhandled exception |
+| 501 Not Implemented | Feature not built | Server doesn't support the method |
+| 502 Bad Gateway | Upstream server error | Nginx/API Gateway got invalid response from backend |
+| 503 Service Unavailable | Server temporarily down | Maintenance, high traffic, deployment |
+| 504 Gateway Timeout | Upstream timeout | Backend didn't respond in time |
+
+**502 vs 504:**
+
+- 502: Backend responded, but with invalid response
+- 504: Backend didn't respond at all (timeout)
+
+**Interview tip:** Always use the correct status codes. Returning 200 for errors is a red flag.
+
+### Request/Response Formatting
+
+**Request body (JSON):**
+
+```json
+POST /users
+Content-Type: application/json
+
+{
+  "name": "Alice Johnson",
+  "email": "alice@example.com",
+  "role": "engineer"
+}
+```
+
+**Response envelope pattern (recommended):**
+
+```json
+{
+  "data": {
+    "id": 42,
+    "name": "Alice Johnson",
+    "email": "alice@example.com",
+    "role": "engineer",
+    "createdAt": "2026-06-14T10:30:00Z"
+  },
+  "meta": {
+    "timestamp": "2026-06-14T10:30:00Z",
+    "requestId": "req_abc123"
+  }
+}
+```
+
+**Error response pattern:**
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request body",
+    "details": [
+      {
+        "field": "email",
+        "message": "Email is required"
+      },
+      {
+        "field": "name",
+        "message": "Name must be at least 2 characters"
+      }
+    ]
+  }
+}
+```
+
+### Pagination
+
+Pagination splits large result sets into smaller pages. The choice of pagination strategy directly impacts performance, data consistency, and user experience.
+
+#### Offset-Based Pagination
+
+Uses `page` and `limit` (or `offset` and `limit`) to fetch a specific page.
+
+```
+GET /tickets?limit=10&offset=0
+Returns tickets 1–10.
+
+GET /tickets?limit=10&offset=10
+Returns tickets 11–20.
+```
+
+**How it works under the hood:**
+
+```sql
+-- Page 1
+SELECT * FROM tickets ORDER BY created_at LIMIT 10;
+
+-- Page 2
+SELECT * FROM tickets ORDER BY created_at LIMIT 10 OFFSET 10;
+
+-- Page 10000
+SELECT * FROM tickets ORDER BY created_at LIMIT 10 OFFSET 100000;
+```
+
+**The data drift problem:**
+
+Suppose you have T1 T2 T3 T4 T5. You fetch the first 2: T1 T2. Now a new ticket is inserted at the beginning: T0 T1 T2 T3 T4 T5. Your next request with `offset=2` returns T2 T3 — T2 appears again.
+
+This causes **duplicates** or **skipped records** when data is inserted or deleted between page requests.
+
+**Performance degradation at scale:**
+
+```sql
+OFFSET 100000 LIMIT 10
+```
+
+The database must scan and skip 100,000 rows before returning 10. As offset grows, query time increases linearly.
+
+**When to use offset pagination:**
+
+- Small datasets (&lt; 10k records)
+- Admin dashboards where users jump to specific pages
+- Data rarely changes between requests
+- Simple implementation is prioritized
+
+#### Cursor-Based Pagination (Keyset Pagination)
+
+Instead of saying "give me page 2", you say "give me records after this specific record". The cursor acts like a bookmark pointing to the last record fetched.
+
+**First request:**
+
+```
+GET /tickets?page_size=3
+
+Response:
+{
+  "results": [
+    {"id": 101, "created_at": "2026-01-01"},
+    {"id": 102, "created_at": "2026-01-02"},
+    {"id": 103, "created_at": "2026-01-03"}
+  ],
+  "next_cursor": "abc123"
+}
+```
+
+**Second request:**
+
+```
+GET /tickets?page_size=3&cursor=abc123
+
+Response:
+{
+  "results": [
+    {"id": 104},
+    {"id": 105},
+    {"id": 106}
+  ],
+  "next_cursor": "xyz789"
+}
+```
+
+Keep using the returned cursor until no `next_cursor` exists.
+
+**What's inside the cursor?**
+
+The cursor typically encodes the last record's sort field (e.g., `created_at` or `id`), often Base64-encoded:
+
+```
+eyJjcmVhdGVkX2F0IjoiMjAyNi0wMS0wMyJ9
+```
+
+Decodes to:
+
+```json
+{"created_at": "2026-01-03"}
+```
+
+The cursor is saying: "Start after the ticket whose `created_at` value was X."
+
+**Backend SQL:**
+
+```sql
+-- First request
+SELECT * FROM tickets ORDER BY created_at LIMIT 10;
+
+-- Suppose last record: created_at = '2026-01-10'
+
+-- Next request
+SELECT * FROM tickets
+WHERE created_at > '2026-01-10'
+ORDER BY created_at
+LIMIT 10;
+```
+
+This is why cursor pagination is called **keyset pagination** — the database jumps directly using an index instead of scanning rows.
+
+**Cursor Types:**
+
+| Type | Description | Pros | Cons |
+| --- | --- | --- | --- |
+| Sequential ID / Timestamp | Uses auto-incremented id or timestamp as cursor | Simple, ensures unique position | Requires stable, sortable field |
+| Encoded Cursor | Encodes last item's fields (e.g., id + name) as Base64 | Abstracts implementation details | Slightly more complex |
+| Opaque Cursor | Arbitrary token that doesn't reveal underlying data | Hides implementation, secure | Server must maintain cursor-to-position mapping |
+| Hash-Based Cursor | Hash of the last record's position | Stable, no data leakage | Adds hash computation overhead |
+| Composite Cursor | Combination of fields (e.g., name + id) | Handles duplicate sort values | More complex query logic |
+
+**When to use cursor pagination:**
+
+- Large datasets (millions of records)
+- Infinite scrolling UIs
+- Real-time feeds where data is frequently inserted/deleted
+- API synchronization between services
+- Performance at scale matters
+
+#### Keyset vs Offset: Quick Comparison
+
+| Feature | Offset Pagination | Cursor Pagination |
+| --- | --- | --- |
+| Uses page numbers | Yes | No |
+| Jump to page N | Yes | No |
+| Good for huge datasets | No | Yes |
+| Handles inserts/deletes safely | No | Yes |
+| Performance at high page counts | Slow (linear degradation) | Fast (constant time) |
+| Infinite scrolling | Okay | Excellent |
+| Database query | `OFFSET n LIMIT m` | `WHERE sort_field > cursor LIMIT m` |
+| Requires indexed sort field | Recommended | Required |
+
+**Interview tip:** In system design interviews, always prefer cursor-based pagination for any feed, timeline, or large dataset. Mention the offset drift problem and the index-based performance advantage.
+
+#### Keyset Pagination Effects on Performance
+
+**Offset pagination performance curve:**
+
+```
+Page 1:    ~1ms    (OFFSET 0)
+Page 100:  ~5ms    (OFFSET 1000)
+Page 1000: ~50ms   (OFFSET 10000)
+Page 10000: ~500ms (OFFSET 100000)
+Page 100000: ~5s   (OFFSET 1000000)  ← Unusable
+```
+
+**Cursor pagination performance:**
+
+```
+Page 1:    ~1ms
+Page 100:  ~1ms
+Page 1000: ~1ms
+Page 10000: ~1ms
+Page 100000: ~1ms  ← Constant time
+```
+
+The database uses the index to jump directly to the correct position. No row scanning required.
+
+**Real-world example — DynamoDB:**
+
+DynamoDB returns the Primary Key of the last record as `LastEvaluatedKey` for each query. This value becomes the `ExclusiveStartKey` for the next query — implementing cursor pagination natively at the database level.
+
+### Filtering and Sorting
+
+```
+GET /users?role=engineer&status=active&sort=-createdAt&limit=20
+GET /orders?status=paid&createdAfter=2026-01-01&sort=totalAmount
+```
+
+**Convention:**
+
+- Use query parameters for filtering: `?field=value`
+- Use `-` prefix for descending sort: `?sort=-createdAt`
+- Multiple filters: `?status=active&role=engineer`
+
+### Versioning
+
+**URL path versioning (most common for public APIs):**
+
+```
+GET /v1/users
+GET /v2/users
+```
+
+**Header versioning:**
+
+```
+GET /users
+Accept: application/vnd.myapp.v2+json
+```
+
+**Query parameter versioning:**
+
+```
+GET /users?version=2
+```
+
+**Recommendation:** Use URL path versioning for public APIs. It's explicit, visible, and easy to test. Reserve new versions for breaking changes. Make backward-compatible changes within a version.
+
+### HATEOAS
+
+HATEOAS (Hypermedia as the Engine of Application State) means including links in your responses that tell the client what actions are available. The client doesn't hardcode URLs — it follows links provided by the server.
+
+```json
+GET /users/42
+
+{
+  "data": {
+    "id": 42,
+    "name": "Alice"
+  },
+  "links": {
+    "self": "/users/42",
+    "orders": "/users/42/orders",
+    "avatar": "/users/42/avatar"
+  }
+}
+```
+
+**Why HATEOAS exists — decoupling client from API structure:**
+
+Without HATEOAS, the client hardcodes all URLs:
+
+```
+Client knows:
+  GET /users/42
+  GET /users/42/orders
+  GET /users/42/avatar
+  POST /users/42/deactivate
+```
+
+If the API changes `/users/42/orders` to `/customers/42/purchases`, every client must be updated.
+
+With HATEOAS, the client only follows links:
+
+```json
+{
+  "id": 42,
+  "name": "Alice",
+  "links": {
+    "orders": "/customers/42/purchases"
+  }
+}
+```
+
+The client doesn't care what the actual URL is — it just follows the `orders` link.
+
+**State-driven actions:**
+
+The server tells the client what actions are valid based on current state:
+
+If status is PENDING:
+
+```json
+{
+  "status": "PENDING",
+  "links": {
+    "cancel": "/orders/123/cancel",
+    "pay": "/orders/123/pay"
+  }
+}
+```
+
+If status is SHIPPED:
+
+```json
+{
+  "status": "SHIPPED",
+  "links": {
+    "track": "/orders/123/track"
+  }
+}
+```
+
+The client doesn't need business logic like `if (status === "PENDING")`. The server drives the UI state.
+
+**Why HATEOAS isn't widely adopted:**
+
+- Modern apps usually have API documentation (Swagger/OpenAPI) and know all endpoints beforehand
+- Frontend frameworks handle routing independently
+- Extra complexity with little practical benefit for most companies
+- More commonly discussed in REST theory than seen in production APIs
+
+### Rate Limiting Headers
+
+Include these in every response to help clients understand their limits:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 995
+X-RateLimit-Reset: 1623456789
+```
+
+When rate limited, return `429 Too Many Requests` with a `Retry-After` header.
+
+---
+
+## 1.1.2 GraphQL
+
+GraphQL is a query language for APIs developed by Facebook (Meta) in 2012 and open-sourced in 2015. It gives clients the power to ask for exactly what they need — no more, no less. In 2026, over 50% of enterprises use GraphQL in production.
+
+### Schema Definition Language (SDL)
+
+GraphQL APIs are defined by a schema that describes all possible queries and mutations.
+
+```graphql
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  orders: [Order!]!
+  createdAt: DateTime!
+}
+
+type Order {
+  id: ID!
+  total: Float!
+  status: OrderStatus!
+  items: [OrderItem!]!
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  DELIVERED
+}
+
+type Query {
+  user(id: ID!): User
+  users(limit: Int, offset: Int): [User!]!
+  order(id: ID!): Order
+}
+
+type Mutation {
+  createUser(input: CreateUserInput!): User!
+  updateUser(id: ID!, input: UpdateUserInput!): User!
+  deleteUser(id: ID!): Boolean!
+}
+
+input CreateUserInput {
+  name: String!
+  email: String!
+}
+```
+
+### Queries vs Mutations vs Subscriptions
+
+**Queries** — Read data (like GET in REST):
+
+```graphql
+{
+  user(id: 42) {
+    name
+    email
+    orders {
+      id
+      total
+      status
+    }
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "user": {
+      "name": "Alice",
+      "email": "alice@example.com",
+      "orders": [
+        { "id": "1", "total": 50.00, "status": "PAID" },
+        { "id": "2", "total": 30.00, "status": "SHIPPED" }
+      ]
+    }
+  }
+}
+```
+
+Notice: The client asked for only `name`, `email`, and `orders` — no over-fetching.
+
+**Mutations** — Write/modify data (like POST/PUT/DELETE in REST):
+
+```graphql
+mutation {
+  createUser(input: { name: "Bob", email: "bob@example.com" }) {
+    id
+    name
+  }
+}
+```
+
+**Subscriptions** — Real-time updates via WebSocket:
+
+```graphql
+subscription {
+  orderStatusChanged(orderId: "123") {
+    status
+    updatedAt
+  }
+}
+```
+
+### Resolvers
+
+Resolvers are functions that populate each field in the schema. They connect the schema to your data sources.
+
+```javascript
+const resolvers = {
+  Query: {
+    user: async (parent, args, context) => {
+      return await context.db.users.findById(args.id);
+    },
+  },
+  User: {
+    orders: async (parent, args, context) => {
+      return await context.db.orders.findByUserId(parent.id);
+    },
+  },
+};
+```
+
+### The N+1 Problem and DataLoader
+
+**The N+1 problem:** When querying a list of users and their orders, GraphQL might execute:
+
+- 1 query to get all users
+- N queries to get orders for each user (one per user)
+
+**Solution: DataLoader** batches and caches database requests within a single GraphQL request.
+
+```javascript
+const orderLoader = new DataLoader(async (userIds) => {
+  const orders = await db.orders.findByUserIds(userIds);
+  return userIds.map(id => orders.filter(o => o.userId === id));
+});
+
+// In resolver:
+User: {
+  orders: (parent) => orderLoader.load(parent.id),
+}
+```
+
+### When to Use GraphQL vs REST
+
+**Use GraphQL when:**
+
+- Frontend needs data from multiple backends per screen
+- Data shapes vary across clients (mobile vs web)
+- You want to avoid over-fetching/under-fetching
+- You need real-time updates (subscriptions)
+- Your API has complex, nested data relationships
+
+**Use REST when:**
+
+- Building simple CRUD APIs
+- You want HTTP caching (CDN-friendly)
+- The API is public and consumed by external developers
+- Your team is unfamiliar with GraphQL
+- You need file uploads (GraphQL makes this harder)
+
+### Limitations of GraphQL
+
+1. **Complexity:** More infrastructure to set up (schema, resolvers, DataLoader)
+2. **Caching:** HTTP caching doesn't work as naturally (everything is POST)
+3. **File uploads:** Not natively supported; requires workarounds
+4. **Query complexity attacks:** Unbounded queries can be expensive to resolve (DoS vector)
+5. **Error handling:** Errors are returned with 200 status codes
+6. **Learning curve:** Steeper for teams used to REST
+
+---
+
+## 1.1.3 gRPC
+
+gRPC is a high-performance Remote Procedure Call (RPC) framework developed by Google. It uses Protocol Buffers (Protobuf) for serialization and HTTP/2 for transport. gRPC is the de facto standard for internal microservice communication at companies like Netflix, Uber, and Google.
+
+### Protocol Buffers (Protobuf)
+
+Protobuf is a language-neutral, platform-neutral mechanism for serializing structured data. It's smaller and faster than JSON.
+
+```protobuf
+syntax = "proto3";
+
+package users;
+
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+  rpc ListUsers (ListUsersRequest) returns (stream User);
+  rpc CreateUser (CreateUserRequest) returns (User);
+}
+
+message User {
+  int32 id = 1;
+  string name = 2;
+  string email = 3;
+  repeated Order orders = 4;
+}
+
+message GetUserRequest {
+  int32 id = 1;
+}
+
+message ListUsersRequest {
+  int32 limit = 1;
+  string cursor = 2;
+}
+
+message CreateUserRequest {
+  string name = 1;
+  string email = 2;
+}
+```
+
+**Why Protobuf over JSON:**
+
+- **Size:** 3-10x smaller than JSON
+- **Speed:** 5-10x faster serialization/deserialization
+- **Schema:** Enforced schema with backward/forward compatibility
+- **Code generation:** Auto-generates client/server code in any language
+
+### Streaming Types
+
+gRPC supports four streaming patterns:
+
+1. **Unary RPC** (standard request-response):
+
+   ```
+   Client sends one message → Server responds with one message
+   ```
+
+2. **Server streaming:**
+
+   ```
+   Client sends one message → Server responds with a stream of messages
+   Use case: Real-time stock prices, live feeds
+   ```
+
+3. **Client streaming:**
+
+   ```
+   Client sends a stream of messages → Server responds with one message
+   Use case: Upload files, batch processing
+   ```
+
+4. **Bidirectional streaming:**
+
+   ```
+   Client and server both send streams of messages independently
+   Use case: Chat applications, real-time collaboration
+   ```
+
+### When to Use gRPC
+
+**Use gRPC when:**
+
+- Internal service-to-service communication (microservices)
+- High throughput, low latency requirements
+- Streaming is a core product feature
+- Polyglot environments (services in different languages)
+- You need strong type safety
+
+**Don't use gRPC when:**
+
+- Public-facing APIs (limited browser support)
+- Simple CRUD operations
+- Your team has no Protobuf experience
+- You need HTTP caching
+
+### gRPC vs REST vs GraphQL
+
+| Feature | REST | GraphQL | gRPC |
+| --- | --- | --- | --- |
+| **Transport** | HTTP/1.1 | HTTP/1.1 | HTTP/2 |
+| **Data Format** | JSON | JSON | Protobuf (binary) |
+| **Performance** | Good | Good | 5-10x faster |
+| **Browser Support** | Full | Full | Limited (requires gRPC-Web) |
+| **Caching** | Native HTTP caching | Limited | Not built-in |
+| **Streaming** | SSE/WebSocket | Subscriptions | Native |
+| **Learning Curve** | Low | Medium | High |
+| **Code Generation** | Optional (OpenAPI) | Optional | Built-in |
+| **Best For** | Public APIs, simple CRUD | Complex frontend data needs | Internal microservices |
+
+**Interview decision framework:**
+
+- Public API → REST
+- Complex frontend with multiple data sources → GraphQL
+- Internal microservices, high performance → gRPC
+- Real-time streaming as core feature → gRPC
+
+---
+
+## 1.1.4 API Gateway
+
+An API Gateway is a single entry point for all client requests in a microservices architecture. It sits between clients and backend services, handling cross-cutting concerns like authentication, rate limiting, and routing.
+
+### The Problem API Gateway Solves
+
+**Without API Gateway:**
+
+```
+Client → Auth Service (authenticate)
+Client → User Service (get profile)
+Client → Order Service (get orders)
+Client → Payment Service (get payment methods)
+```
+
+Problems:
+
+- Client must know about every service
+- No centralized authentication
+- No centralized rate limiting
+- Each service handles cross-cutting concerns separately
+
+**With API Gateway:**
+
+```
+Client → API Gateway → Auth (middleware)
+                     → /users → User Service
+                     → /orders → Order Service
+                     → /payments → Payment Service
+```
+
+Benefits:
+
+- Single entry point
+- Centralized auth, rate limiting, logging
+- Client doesn't know about internal services
+- Protocol translation (REST → gRPC internally)
+
+### Core Responsibilities
+
+**1. Request Routing**:Route requests to the correct backend based on path, method, or headers:
+
+```
+GET  /api/users/*     → User Service (port 3001)
+POST /api/orders/*    → Order Service (port 3002)
+GET  /api/products/*  → Product Service (port 3003)
+WS   /ws/*            → WebSocket Service (port 3004)
+```
+
+**2. Authentication & Authorization**:Verify identity at the gateway, not in every service:
+
+```
+Client → Gateway → Verify JWT → Extract user_id → Add X-User-ID header → Backend
+```
+
+Best practice: Gateway handles authentication (who are you), services handle authorization (what can you do).
+
+**3. Rate Limiting**:Protect backends from abuse:
+
+| Algorithm | How It Works | Best For |
+| --- | --- | --- |
+| Token Bucket | Tokens refill at fixed rate, each request consumes one | Burst-friendly, most common |
+| Sliding Window | Count requests in rolling time window | Smooth rate limiting |
+| Fixed Window | Count requests per time interval | Simple, but allows bursts at boundaries |
+
+**4. Request Transformation**:Modify requests before forwarding:
+
+- Add/remove headers
+- Transform request body
+- Protocol translation (REST → gRPC)
+- API versioning (v1 → v2 mapping)
+
+**5. Response Aggregation**:Combine responses from multiple services into one:
+
+```
+GET /api/dashboard →
+  User Service (get profile)
+  Order Service (get recent orders)
+  Payment Service (get balance)
+  = Single aggregated response to client
+```
+
+**6. SSL Termination**:Handle HTTPS encryption/decryption at the gateway:
+
+- Client communicates with gateway over HTTPS
+- Gateway communicates with backend services over HTTP (internal network)
+- Reduces CPU load on backend services
+
+**7. Load Balancing**:Distribute requests across multiple instances of a service.
+
+**8. Circuit Breaking**:Prevent cascading failures:
+
+```
+Service A → Gateway → Service B (down)
+  → Gateway returns fallback response
+  → Doesn't hammer Service B with retries
+```
+
+A Circuit Breaker prevents a failing service from causing a cascade of failures across the system.
+
+**Without a Circuit Breaker:**
+
+```
+Client → Service A → Gateway → Service B (down)
+```
+
+What happens:
+
+- Service A sends requests to Service B
+- Service B is unavailable or extremely slow
+- Gateway keeps retrying or waiting for timeouts
+- Threads, connections, and resources get exhausted
+- Service A becomes slow or unavailable
+- The failure spreads through the system
+
+**With a Circuit Breaker:**
+
+```
+Client → Service A → Gateway ──X──> Service B (down)
+                                  ↓
+                            Fallback Response
+```
+
+When failures exceed a threshold:
+
+- Circuit breaker opens
+- Requests to Service B are immediately rejected
+- Gateway returns: cached data, default response, "service temporarily unavailable", or another fallback
+- No repeated retries hammer Service B
+- Service A remains responsive
+
+**Circuit Breaker States:**
+
+1. **Closed (Normal)** — Requests flow normally to Service B. Failures are monitored.
+
+2. **Open (Failure Detected)** — No requests reach Service B. Immediate fallback returned.
+
+3. **Half-Open (Recovery Test)** — After a cooldown period, a few requests are allowed through. If they succeed → circuit closes. If they fail → circuit opens again.
+
+**Why Service A becomes slow when Service B is down:**
+
+```
+Service A calls Service B → waits... → waits... → timeout after 30 seconds
+```
+
+During those 30 seconds:
+
+- A thread in Service A is occupied
+- A connection is occupied
+- Memory is being used to track the request
+- The user is still waiting
+
+With 1,000 users doing this simultaneously:
+
+- Thread pool becomes full
+- New requests can't get a thread
+- Requests queue up
+- Response times increase dramatically
+
+So even though Service A itself is healthy, it becomes slow because all its resources are stuck waiting for Service B.
+
+**Why retries are a problem (Retry Storm):**
+
+One user request may generate:
+
+```
+Request 1 → Service B fails
+Retry #1
+Retry #2
+Retry #3
+─────────────
+4 total requests
+```
+
+With 1,000 users × 4 requests = 4,000 requests hitting the failing service.
+
+**How a Circuit Breaker helps:**
+
+```
+Without breaker: 1000 requests × 30 sec waiting = 30,000 sec of resource usage
+With breaker:    1000 requests × 5 ms fallback  = 5 sec of resource usage
+```
+
+**Real-world analogy:** Restaurant kitchen (Service B) catches fire.
+
+- Without circuit breaker: Waiter keeps submitting orders, kitchen can't cook them, orders pile up, entire restaurant slows down
+- With circuit breaker: Manager stops sending orders to kitchen, customers are told "Only cold sandwiches available", restaurant continues operating (degraded but functional)
+
+**Code example (Resilience4j):**
+
+```java
+@CircuitBreaker(name = "payment-service", fallbackMethod = "fallback")
+public String pay() {
+    return paymentService.process();
+}
+
+public String fallback(Exception ex) {
+    return "Payment service temporarily unavailable";
+}
+```
+
+**Interview definition:** Circuit Breaker is a resilience pattern that temporarily stops requests to a failing service and returns a fallback response, preventing resource exhaustion and cascading failures while the service recovers.
+
+**9. Caching**:Cache frequently accessed responses at the gateway level.
+
+### Common API Gateway Implementations
+
+| Gateway | Type | Key Features |
+| --- | --- | --- |
+| **Kong** | Open-source | Plugin ecosystem, runs on Nginx |
+| **AWS API Gateway** | Managed | Serverless, integrates with Lambda |
+| **Nginx** | Open-source | Reverse proxy + load balancer |
+| **Envoy** | Open-source | Cloud-native, used by Istio |
+| **HAProxy** | Open-source | High performance, L4/L7 |
+| **Azure API Management** | Managed | Enterprise, integrates with Azure |
+| **Google Cloud Endpoints** | Managed | Integrates with GCP services |
+
+### Backend for Frontend (BFF) Pattern
+
+Different clients have different needs. Instead of one gateway for all, create a gateway per client type:
+
+```
+Mobile App → Mobile BFF (optimized for mobile)
+Web App    → Web BFF (optimized for desktop)
+Third Party → Public API Gateway (rate limited, versioned)
+```
+
+Each BFF tailors the API for its specific client.
+
+---
+
+## 1.1.5 API Design Patterns
+
+### Idempotency Keys
+
+Prevent duplicate processing in distributed systems:
+
+```
+POST /v1/payments
+Idempotency-Key: pay_abc123
+
+{
+  "amount": 5000,
+  "currency": "usd",
+  "source": "tok_visa"
+}
+```
+
+Server behavior:
+
+1. Check if `pay_abc123` exists in idempotency store
+2. If yes → return cached response (don't process again)
+3. If no → process payment, store response with key
+
+**Stripe's approach (gold standard):** Every API call includes an idempotency key. If the same key is sent twice, Stripe returns the original result without processing again.
+
+### Webhooks
+
+Instead of polling for updates, register a callback URL that gets called when something happens:
+
+```
+POST /v1/webhooks
+{
+  "url": "https://your-app.com/webhook",
+  "events": ["payment.succeeded", "payment.failed"]
+}
+```
+
+When the event occurs, your server receives a POST request:
+
+```
+POST https://your-app.com/webhook
+Content-Type: application/json
+
+{
+  "event": "payment.succeeded",
+  "data": {
+    "paymentId": "pay_123",
+    "amount": 5000
+  }
+}
+```
+
+**Best practices:**
+
+- Return 200 quickly, process asynchronously
+- Verify webhook signatures (prevent spoofing)
+- Implement retry logic with exponential backoff
+- Support idempotency for webhook handlers
+
+### Long Polling vs Short Polling vs WebSockets
+
+| Technique | How It Works | Latency | Server Load | Use Case |
+| --- | --- | --- | --- | --- |
+| **Short Polling** | Client repeatedly requests updates at fixed intervals | High | High | Simple, legacy systems |
+| **Long Polling** | Client requests, server holds connection until data available | Medium | Medium | Fallback when WebSocket unavailable |
+| **WebSocket** | Persistent bidirectional connection | Low | Low | Real-time features (chat, gaming) |
+| **SSE** | Server pushes updates over HTTP | Low | Low | Notifications, live feeds |
+
+**Interview recommendation:** Use WebSockets for real-time features. Use SSE for server-to-client push. Use long polling only as a fallback.
+
+### API Keys vs OAuth 2.0
+
+| Mechanism | How It Works | Security Level | Use Case |
+| --- | --- | --- | --- |
+| **API Key** | Static token in header | Basic | Server-to-server, third-party access |
+| **OAuth 2.0** | Token-based with authorization flow | High | User-facing apps, delegated access |
+| **JWT** | Self-contained token with claims | High | Stateless authentication |
+
+### Error Handling Standards
+
+Always return consistent error responses:
+
+```json
+{
+  "error": {
+    "code": "INSUFFICIENT_FUNDS",
+    "message": "Your account has insufficient funds for this transaction",
+    "status": 422,
+    "details": {
+      "currentBalance": 3000,
+      "requestedAmount": 5000
+    },
+    "requestId": "req_abc123"
+  }
+}
+```
+
+### Backward Compatibility
+
+When evolving APIs:
+
+1. **Add new fields** — never remove or rename existing fields
+2. **Use versioning** — create new versions for breaking changes
+3. **Deprecation notices** — announce deprecation 6-12 months before removal
+4. **Sunset headers** — include `Sunset` header with removal date
+5. **Graceful degradation** — new fields should have sensible defaults for old clients
+
+---

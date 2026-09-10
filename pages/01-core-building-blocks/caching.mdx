@@ -1,0 +1,748 @@
+---
+title: Caching
+---
+
+import { Callout } from 'nextra/components'
+
+# 1.3 Caching
+
+> Caching is the single most impactful performance optimization for any system. It stores frequently accessed data in a fast-access medium (RAM) to reduce database load and improve response times. However, caching introduces the hardest problem in computer science: cache invalidation.
+
+## 1.3.1 Caching Strategies
+
+### Cache-Aside (Lazy Loading)
+
+The most common caching strategy. The application is responsible for all cache interactions.
+
+**Read path:**
+
+```
+1. Application asks cache for data
+2. Cache HIT → return data
+3. Cache MISS → query database
+4. Write result to cache
+5. Return data to client
+```
+
+**Write path:**
+
+```
+1. Write to database
+2. Invalidate (delete) cache entry
+```
+
+**Pros:** Cache only holds requested data. Cache failures don't bring down the system. **Cons:** Cache miss = 3 round trips (cache, DB, cache write). Data can be stale.
+
+### Write-Through
+
+Cache and database are updated simultaneously.
+
+**Write path:**
+
+```
+1. Application writes to cache AND database at the same time
+2. Both are updated atomically
+```
+
+**Read path:**
+
+```
+1. Application asks cache for data
+2. Cache HIT → return data
+3. Cache MISS → query database (should rarely happen if writes go through cache)
+```
+
+**Pros:** Cache is always up-to-date. Reads are fast (cache is pre-warmed). **Cons:** Slower writes (write twice). If updated record is never read, wasted memory.
+
+### Write-Behind (Write-Back)
+
+Application writes to cache only. A background process flushes to database.
+
+**Write path:**
+
+```
+1. Application writes to cache only (fast!)
+2. Background process asynchronously flushes to database
+```
+
+**Pros:** Lightning-fast writes. Write buffering handles database outages. **Cons:** Risk of data loss if cache crashes before flush. Complex implementation.
+
+### Read-Through
+
+Similar to cache-aside, but the cache layer handles database reads.
+
+**Read path:**
+
+```
+1. Application asks cache for data
+2. Cache MISS → cache itself queries database
+3. Cache stores result and returns it
+```
+
+**Pros:** Application code is simpler (only interacts with cache). **Cons:** Cache must know how to query the database. Less flexible.
+
+### Refresh-Ahead
+
+Automatically refresh popular cache entries before they expire.
+
+```
+1. Cache entry has TTL of 60 seconds
+2. When entry is accessed with <10 seconds remaining, refresh in background
+3. Old entry served until refresh completes
+```
+
+**Pros:** No cache misses for popular data. Smooth performance. **Cons:** Complex to implement. May refresh data that's rarely accessed.
+
+---
+
+## 1.3.2 Caching Levels
+
+### Browser Cache
+
+HTTP headers control browser caching:
+
+```
+Cache-Control: max-age=3600        # Cache for 1 hour
+Cache-Control: no-cache            # Always validate with server
+ETag: "abc123"                     # Version identifier
+Last-Modified: Sat, 14 Jun 2026    # Timestamp
+```
+
+### CDN Cache (Edge)
+
+Content Delivery Networks cache static assets at edge locations worldwide.
+
+**Push CDN:** You upload content to CDN nodes. **Pull CDN:** CDN fetches from origin on first request, then caches.
+
+### Application Cache (In-Memory)
+
+Local in-process cache (e.g., LRU cache in your application).
+
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=1000)
+def get_user(user_id):
+    return db.query(f"SELECT * FROM users WHERE id = {user_id}")
+```
+
+**Pros:** Fastest possible access (no network). **Cons:** Not shared across instances. Lost on restart.
+
+### Distributed Cache (Redis, Memcached)
+
+External cache shared across all application instances.
+
+```
+App Instance 1 ──┐
+App Instance 2 ──┼── Redis Cluster
+App Instance 3 ──┘
+```
+
+### Database Query Cache
+
+MySQL's query cache (deprecated in MySQL 8.0) or PostgreSQL's shared buffers.
+
+### Object-Level Cache
+
+Cache individual objects or computed results:
+
+```python
+# Cache computed value
+@cache(ttl=300)
+def get_user_stats(user_id):
+    orders = db.query("SELECT * FROM orders WHERE user_id = ?", user_id)
+    return compute_stats(orders)
+```
+
+---
+
+## 1.3.3 Cache Invalidation
+
+Phil Karlton's famous quote: *"There are only two hard things in Computer Science: cache invalidation and naming things."*
+
+### Time-To-Live (TTL)
+
+Set an expiration time on cache entries:
+
+```python
+redis.setex("user:42", 300, json.dumps(user_data))  # Expires in 5 minutes
+```
+
+**Trade-off:**
+
+- Short TTL → Fresh data, but more cache misses
+- Long TTL → Fewer misses, but stale data
+
+### Event-Based Invalidation
+
+Delete cache entries when underlying data changes:
+
+```python
+def update_user(user_id, data):
+    db.update_user(user_id, data)
+    redis.delete(f"user:{user_id}")  # Invalidate cache
+```
+
+**Challenge:** In distributed systems, you must ensure all instances invalidate their caches. Use Redis Pub/Sub or message queues for cross-instance invalidation.
+
+### Version-Based Invalidation
+
+Include version in cache key:
+
+```python
+def get_user(user_id):
+    user = db.get_user(user_id)
+    cache_key = f"user:{user_id}:v{user.version}"
+    redis.setex(cache_key, 300, json.dumps(user))
+```
+
+### The Hard Problem of Cache Invalidation
+
+This is one of those topics that sounds simple ("just delete cache after update"), but becomes painful in distributed systems. Let's break each point with real-world examples.
+
+#### 1. Race Conditions: Read between write and invalidation returns stale data
+
+**Problem**
+
+There's a tiny timing gap between:
+
+1. Writing new data to DB
+2. Invalidating cache
+
+During this gap, someone can still read old cached data.
+
+**Example**
+
+Suppose user profile is cached.
+
+Current cache:
+
+```
+user:123 = {
+  "name": "John",
+  "age": 25
+}
+```
+
+User updates age to 26.
+
+**Timeline**
+
+```
+T1: Update DB → age = 26
+T2: Cache still has age = 25
+T3: Another request comes
+T4: Request reads cache → gets stale age = 25 ❌
+T5: Cache invalidated
+```
+
+**Flow**
+
+```
+Request A (Update)
+      |
+      v
+DB Updated (26)
+      |
+      |   <-- tiny gap
+      |
+Request B (Read)
+      |
+Reads old cache (25) ❌
+      |
+Cache invalidated
+```
+
+Even though DB is correct, user temporarily sees old data.
+
+**Why hard?**
+
+In distributed systems, milliseconds matter. Thousands of requests can happen during that tiny gap.
+
+**Common fixes**
+
+| Fix | How It Works |
+| --- | --- |
+| **Write-through** | Update cache immediately after DB write (Update DB → Update Cache) |
+| **Cache-aside with versioning** | Store version/timestamp, ignore older cache versions (e.g., `{ "age": 26, "version": 15 }`) |
+| **Distributed locks** | Prevent reads during update (rare, expensive) |
+
+#### 2. Multi-instance: Instance A invalidates, Instance B still has stale data
+
+**Problem**
+
+Modern systems run multiple app servers.
+
+Imagine:
+
+```
+Load Balancer
+    /   |   \
+ AppA AppB AppC
+```
+
+Each server may have its own local in-memory cache.
+
+**Example:**
+
+```
+AppA cache → user:123 = old value
+AppB cache → user:123 = old value
+AppC cache → user:123 = old value
+```
+
+User updates data through AppA.
+
+**What happens?**
+
+```
+User updates via AppA
+       |
+DB updated
+       |
+AppA clears its cache ✅
+
+But:
+AppB cache = stale ❌
+AppC cache = stale ❌
+```
+
+Next request routed to AppB:
+
+```
+Load Balancer
+      |
+      v
+    AppB
+      |
+Reads stale cache ❌
+```
+
+**Why hard?**
+
+You must synchronize invalidation across all machines.
+
+**Common fixes**
+
+| Fix | How It Works |
+| --- | --- |
+| **Centralized cache (Redis)** | All instances read/write same cache. Invalidate once with `DEL user:123` — everyone sees update |
+| **Pub/Sub invalidation** | AppA publishes `"user:123 changed"`, all servers receive event and clear local cache (using Redis Pub/Sub or Kafka) |
+
+```
+AppA ---- publish invalidation ---->
+AppB clears cache
+AppC clears cache
+```
+
+#### 3. Network partitions: Invalidation message might not reach all instances
+
+**Problem**
+
+Distributed systems assume networks fail. Suppose you use pub/sub invalidation.
+
+**Expected flow:**
+
+```
+DB update
+   |
+Send invalidation event
+   |
+AppA clears cache
+AppB clears cache
+AppC clears cache
+```
+
+But network issue occurs.
+
+**Reality:**
+
+```
+DB update
+    |
+Invalidate event sent
+   / \
+  /   X
+AppA  AppB (missed message)
+```
+
+AppB never gets invalidation.
+
+So: `AppB cache = stale forever ❌`
+
+**Example:**
+
+Price updated: DB price = ₹500, AppB cache = ₹300. Some users see ₹500, others see ₹300 ❌ — very dangerous in payments/e-commerce.
+
+**Common fixes**
+
+| Fix | How It Works |
+| --- | --- |
+| **TTL (Time To Live)** | Cache auto expires (e.g., TTL = 5 min). Worst case stale data lives only 5 mins |
+| **Reliable event systems** | Use queue/event log like Apache Kafka or RabbitMQ with consumer retries instead of fire-and-forget pub/sub |
+| **Periodic reconciliation** | Background sync every minute: compare cache vs DB, repair mismatch |
+
+#### 4. Cascading failures: Cache stampede when many requests hit DB simultaneously
+
+**Problem**
+
+Cache expires suddenly. Imagine hot data: `product:iphone`. Millions of users request it.
+
+Normally: `User -> Cache -> Fast response`
+
+Then cache expires.
+
+**Disaster timeline:**
+
+```
+Cache expired
+    ↓
+10,000 requests arrive
+    ↓
+All do:
+Cache miss → Hit database
+    ↓
+10,000 DB queries at once ❌
+    ↓
+DB becomes overloaded
+    ↓
+DB slow → timeouts → retries → even more traffic → system collapse
+```
+
+This is called: **Cache Stampede / Thundering Herd Problem**
+
+**Visual:**
+
+```
+Before expiry:
+10k requests → Cache ✅ → DB = relaxed
+
+After expiry:
+10k requests → Cache MISS ❌ → 10k DB queries ❌ → DB overloaded
+```
+
+**Common fixes**
+
+| Fix | How It Works |
+| --- | --- |
+| **Single flight / request coalescing** | Only one request regenerates cache, others wait. Then cache rebuilt, everyone gets response |
+| **Distributed locking (Redis lock)** | Only one server refreshes cache using `SETNX lock:user:123`. Winner updates cache, others wait |
+| **Stale-while-revalidate** | Serve old cache briefly even when expired. Refresh in background. User gets fast response |
+| **Randomized TTL** | Instead of all expiring at 12:00, spread to 11:58, 12:00, 12:02, 12:04. Prevents mass expiration |
+
+#### Why people say "Cache invalidation is one of the hardest problems in computer science"
+
+Because you are trying to balance: **Freshness ⚔ Performance**
+
+You want:
+
+- Always correct data ✅
+- Super fast reads ✅
+- Fault tolerance ✅
+- Multiple servers ✅
+
+But improving one often hurts another.
+
+- No cache = always fresh but slow
+- Aggressive cache = fast but stale
+
+**Distributed systems are mostly about choosing the acceptable level of staleness.**
+
+---
+
+## 1.3.4 Cache Eviction Policies
+
+When cache memory is full, the system must decide: "Which cached item should I remove to make space?"
+
+This is called a cache eviction policy. Think of cache like a small hostel room with limited space. New people (data) keep coming in, so you must kick someone out.
+
+### 1. LRU (Least Recently Used)
+
+**Idea:** Remove the item that has not been used for the longest time.
+
+**Assumption:** If something hasn't been used recently, it's probably not needed soon.
+
+**Example:**
+
+```
+Cache size = 3
+
+Requests: A → B → C
+Cache: [A, B, C]
+
+Now access A:
+A becomes recently used.
+Order: [B, C, A]
+
+Now request D:
+Cache full → remove least recently used
+Who is oldest? B ❌
+Final cache: [C, A, D]
+```
+
+**Real-world analogy:** Your study desk — books you touched recently stay nearby. The dusty book untouched for weeks gets removed.
+
+**Why LRU is popular:** Most applications show temporal locality — if user accessed something recently, they'll likely access it again soon.
+
+Used in: Browser cache, OS page replacement, Redis approximations, CDN caching.
+
+**Implementation:** Usually HashMap + Doubly Linked List for O(1) get, move-to-front, and remove operations.
+
+**Downside:** Fails when access pattern cycles (e.g., cache size = 3, requests: 1 2 3 4 1 2 3 4 — everything keeps getting evicted).
+
+### 2. LFU (Least Frequently Used)
+
+**Idea:** Remove the item accessed least number of times.
+
+**Assumption:** Popular items stay popular.
+
+**Example:**
+
+```
+Cache:
+A → accessed 100 times
+B → accessed 2 times
+C → accessed 1 time
+
+New item: D
+Evict: C ❌ (lowest frequency)
+Final: A, B, D
+```
+
+**Real-world analogy:** You keep frequently used clothes in wardrobe. Rarely used clothes go to storage.
+
+**Why better than LRU sometimes:** If A was accessed 1000 times but not recently, LRU might remove it ❌. LFU says: "No way, A is very valuable" and keeps it.
+
+**Downside — cache pollution:** If A was popular last month but now dead, but frequency = 50,000 accesses, LFU refuses to evict it. New useful data can't enter. Fix: Use LFU with decay — older accesses lose weight.
+
+### 3. FIFO (First In First Out)
+
+**Idea:** Remove the oldest inserted item. No intelligence, just queue behavior.
+
+**Example:**
+
+```
+Cache: [A, B, C]
+New request: D
+Evict: A ❌
+Final: [B, C, D]
+```
+
+Even if A is still heavily used, it gets removed if it's the oldest.
+
+**Why use it?** Very simple, low CPU overhead. Best for uniform access patterns.
+
+### 4. TTL-Based (Time-To-Live)
+
+**Idea:** Remove cache after fixed time.
+
+**Example:** TTL = 5 min → after 5 minutes, auto delete.
+
+**Real-world analogy:** Milk expiry date — no matter how often you drink, expired = throw away.
+
+**Best for:** Time-sensitive data (weather: 10 min, stock prices: 30 sec, OTP: 2 min, news homepage: 5 min).
+
+**Downside:** Bad TTL choice hurts. Too long = stale data ❌. Too short = frequent DB hits ❌.
+
+### 5. Random Eviction
+
+**Idea:** Kick out random item. Literally pick one randomly.
+
+**Why would anyone use this?** Shockingly effective sometimes. Very low overhead — no tracking of recency, frequency, or timestamps. Used in very high-scale systems where metadata cost matters.
+
+### Quick Comparison
+
+| Policy | Smartness | Speed | Best Use |
+| --- | --- | --- | --- |
+| LRU | High | Fast | General apps |
+| LFU | Very High | Medium | Stable hot items |
+| FIFO | Low | Very Fast | Simple workloads |
+| TTL | Medium | Fast | Expiring data |
+| Random | Low | Very Fast | Massive scale/simple systems |
+
+### In practice
+
+Most systems combine policies. Example in Redis: TTL + LRU — expired keys removed first, if still full → LRU eviction.
+
+Typical real systems:
+
+- CDN → TTL + LRU
+- Redis → Approximate LRU/LFU
+- Browser → LRU
+- CPU Cache → Variants of LRU
+
+**For interviews/system design: Default answer = LRU** because most workloads exhibit temporal locality ("recently used → likely reused").
+
+---
+
+## 1.3.5 Distributed Caching
+
+### Redis Data Structures
+
+| Type | Use Case | Commands |
+| --- | --- | --- |
+| String | Cache, counters, flags | GET, SET, INCR, EXPIRE |
+| Hash | User profiles, configs | HGET, HSET, HMGET |
+| List | Queues, activity feeds | LPUSH, RPOP, LRANGE |
+| Set | Tags, unique visitors | SADD, SMEMBERS, SINTER |
+| Sorted Set | Leaderboards, priority queues | ZADD, ZRANGE, ZREVRANK |
+| Stream | Event logs, message queues | XADD, XREAD, XGROUP |
+
+### Redis Persistence
+
+- **RDB (Redis Database Backup):** Periodic snapshots. Fast restarts, but may lose data between snapshots.
+- **AOF (Append-Only File):** Logs every write. More durable, but larger files and slower restarts.
+
+### Redis Replication
+
+- **Primary-Replica:** Primary handles writes, replicas handle reads
+- **Redis Sentinel:** Automatic failover if primary goes down
+- **Redis Cluster:** Data sharded across multiple primaries
+
+### Memcached vs Redis
+
+| Feature | Redis | Memcached |
+| --- | --- | --- |
+| Data structures | Rich (strings, lists, sets, sorted sets, hashes) | Simple (strings only) |
+| Persistence | Yes (RDB, AOF) | No |
+| Replication | Yes | No |
+| Clustering | Yes (Redis Cluster) | Client-side sharding |
+| Memory efficiency | Moderate | High (simple data) |
+| Best for | Complex caching, sessions, pub/sub | Simple, high-throughput caching |
+
+### Consistent Hashing for Cache Distribution
+
+When adding/removing cache nodes, consistent hashing minimizes key redistribution.
+
+```
+Before: Node A, Node B, Node C
+  Key "user:42" → Node B
+
+After adding Node D:
+  Key "user:42" → Node B (still! Only keys between C and D move)
+```
+
+### Cache Hot Key Problem
+
+When a single cache key receives disproportionate traffic:
+
+**Solutions:**
+
+1. **Replication:** Store hot keys on multiple nodes
+2. **Local caching:** Cache hot keys in-process (LRU)
+3. **Key sharding:** Split hot key into multiple sub-keys (e.g., `hotkey:1`, `hotkey:2`)
+
+### Cache Stampede / Thundering Herd
+
+When a popular cache entry expires, many requests hit the database simultaneously.
+
+**Solutions:**
+
+1. **Locking:** First request acquires lock, fetches from DB, others wait
+2. **Probabilistic early refresh:** Randomly refresh before TTL expires
+3. **Background refresh:** Refresh popular entries before they expire
+4. **Never expire:** Refresh in background, serve stale data if refresh fails
+
+### Cache Penetration
+
+Requests for data that doesn't exist in cache OR database.
+
+**Solutions:**
+
+1. **Bloom filter:** Check if key might exist before querying
+2. **Cache null results:** Store empty values with short TTL
+
+### Cache Avalanche
+
+Multiple cache entries expire simultaneously, overwhelming the database.
+
+**Solutions:**
+
+1. **Stagger TTLs:** Add random jitter to expiration times
+2. **Pre-warming:** Refresh cache before known expiration spikes
+3. **Circuit breaker:** If DB is overwhelmed, serve stale data
+
+---
+
+## 1.3.6 CDN (Content Delivery Network)
+
+CDN = Content Delivery Network — a network of servers distributed around the world that stores copies of your content closer to users.
+
+Instead of: India user → USA server (far away, slow), you do: India user → Nearby CDN node in Mumbai (fast).
+
+Result: Lower latency, faster loading, less load on origin server.
+
+**Real flow for** `myapp.com/logo.png`**:**
+
+```
+First request:
+User → CDN edge (Mumbai) → Not found → Origin server (Germany) → Gets image → Stores copy → Returns to user
+
+Next user in India:
+User → Mumbai CDN → Instant response ✅ (no origin hit)
+```
+
+**CDN ≠ AWS Availability Region.** They are completely different things.
+
+| Concept | What It Is | Purpose |
+| --- | --- | --- |
+| **Region** | Geographical area (e.g., Mumbai ap-south-1, Tokyo, Frankfurt) | Where your app lives |
+| **Availability Zone (AZ)** | Separate physical data centers within a region (e.g., ap-south-1a, 1b, 1c) | High availability, disaster recovery |
+| **CDN Edge Location** | Many mini-cache servers worldwide (Mumbai, Delhi, Singapore, London, Tokyo) | Where cached copies live, serve content close to users |
+
+**Who sets the CDN?** YOU (developer/company) configure CDN — not AWS automatically. You separately configure: Cloudflare, Amazon CloudFront, Akamai, Fastly.
+
+Architecture: User → CDN → Load Balancer → App Server (EC2)
+
+### Push CDN vs Pull CDN
+
+| Approach | How It Works | Best For |
+| --- | --- | --- |
+| **Push CDN** | You manually upload content to CDN, CDN distributes globally | Content changes infrequently (app installers, videos, game files, large media) |
+| **Pull CDN** | CDN fetches content automatically on first request, then caches for future | Most websites, CSS, JS, images, APIs (most common) |
+
+**Pull CDN flow:**
+
+```
+User requests image → CDN miss → Origin server → Store in cache → Return
+Next request → CDN hit ✅ (no origin call)
+```
+
+### CDN Caching Strategies
+
+- Cache static assets (images, CSS, JS) aggressively with long TTL: `Cache-Control: public, max-age=31536000` (1 year)
+- **Cache busting (versioned filenames):** Instead of `style.css`, use `style.v2.css` or `main.abc123.js` — browser sees new filename, downloads fresh file. Modern React/Vite/Webpack do this automatically.
+- **Cache-Control headers** tell browser/CDN how long to cache:
+  - Static asset: `Cache-Control: public, max-age=31536000` (1 year)
+  - API data: `Cache-Control: no-cache` (always validate)
+  - Short-lived: `Cache-Control: max-age=300` (5 minutes)
+- **Surrogate-Key for selective invalidation:** Assign tag like `Surrogate-Key: electronics` to cached items, then purge only that tag instead of everything.
+
+### CDN Invalidation
+
+When you need to update cached content:
+
+| Method | How It Works | Use Case |
+| --- | --- | --- |
+| **Purge (Hard delete)** | Immediately remove cached file. Next request fetches from origin | Urgent fixes (wrong image uploaded) |
+| **Soft purge** | Mark as stale, serve old content while CDN refreshes in background (stale-while-revalidate). User gets speed + freshness | Most common approach |
+| **Time-based** | Just wait for TTL to expire | Cheap but slower update |
+
+### Edge Computing
+
+Old CDN: Only stores files. Modern CDN: Can run code at edge locations near users.
+
+Instead of India user → USA backend, you run logic in Mumbai CDN node. Much faster.
+
+**Examples:**
+
+- **Authentication at edge:** Before hitting backend, check JWT valid? If invalid → reject immediately, backend not hit
+- **A/B testing:** CDN decides 50% users → UI A, 50% users → UI B — very fast
+- **Personalization:** At edge, India → show INR ₹, Japan → show ¥, US → show $ — without origin server
+- **Transform response:** Resize image dynamically: `image.jpg?w=200` — CDN resizes at edge, no backend load
+
+**Edge compute platforms:** Cloudflare Workers, AWS Lambda@Edge, Vercel Edge Functions.
+
+**Simple mental model:** Backend Server = Kitchen, CDN = Food delivery network, Edge computing = Small cooking station near customer. Instead of every order going to kitchen, some work happens nearby.
+
+---

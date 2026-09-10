@@ -1,0 +1,210 @@
+---
+title: Proxies
+---
+
+import { Callout } from 'nextra/components'
+
+# 1.5 Proxies
+
+> A proxy is an intermediary server that sits between clients and servers. Proxies serve various purposes: caching, security, load balancing, anonymity, and content filtering.
+
+## Why Proxies Exist
+
+Every proxy solves the same underlying problem: **one side of a connection wants something the other side can't or shouldn't provide directly.** A client wants to browse anonymously, but the server always sees who's asking — unless something sits in between and asks on its behalf. A server wants to hide how many machines are actually behind it, terminate encryption in one place, or reject bad traffic before it reaches application code — but a client connecting directly to one server can't be redirected transparently to a different one without something intercepting the request first.
+
+The proxy is that "something in between." What decides its *type* (forward, reverse, transparent, anonymous, SOCKS) is simply **whose side it's on, and whether either side knows it's there.**
+
+```
+Forward Proxy:  works FOR the client, hides the client from the server
+Reverse Proxy:  works FOR the server, hides the server from the client
+Transparent:    works FOR the network, invisible to both client and server
+```
+
+<Callout type="info">
+**The single question that resolves 90% of "which proxy?" interview confusion:** if you removed the proxy, whose problem would resurface? If the client's identity/access would leak → it was a forward proxy. If the backend topology/load would be exposed → it was a reverse proxy.
+</Callout>
+
+---
+
+### Forward Proxy
+
+Sits in front of clients. Anonymizes client identity from servers.
+
+```
+Client → Forward Proxy → Server
+```
+
+**Use cases:**
+
+- Corporate content filtering
+- Anonymize browsing (VPN, Tor)
+- Bypass geo-restrictions
+- Client-side load balancing
+
+### Reverse Proxy
+
+Sits in front of servers. Hides server identity from clients.
+
+```
+Client → Reverse Proxy → Servers
+```
+
+**Use cases:**
+
+- SSL termination
+- Caching static content
+- Load balancing
+- DDoS protection
+- Request rewriting
+
+### Transparent Proxy
+
+Intercepts network traffic without client configuration. You don't even know it exists.
+
+```
+Client → (intercepted by) Transparent Proxy → Server
+```
+
+**Example:** College WiFi. You visit `adultsite.com` → Blocked. Why? Network silently intercepts. No manual proxy setup.
+
+**Use cases:**
+
+- ISP content filtering
+- Corporate network monitoring
+- Caching at network edge
+
+### Anonymous Proxy
+
+Hides identity. Website sees proxy IP, not yours.
+
+```
+Client → Anonymous Proxy → Server (sees proxy IP, not client IP)
+```
+
+### SOCKS Proxy
+
+Works below HTTP. Can proxy any type of traffic — games, torrent, UDP, TCP.
+
+Unlike HTTP proxy. Useful for: Gaming, P2P, Discord voice.
+
+**Use cases:**
+
+- Non-HTTP traffic (gaming, P2P)
+- Torrenting
+- Applications that don't support HTTP proxies
+
+## How a Proxy Actually Touches a Request
+
+A proxy isn't a passive wire — it terminates the incoming connection and opens a *new* one to the next hop. That has two concrete consequences interviewers like to probe:
+
+**1. The origin server never sees the real client IP by default.** Since the reverse proxy's own IP is what the backend sees as the "source," proxies inject headers so the original client IP survives the hop:
+
+```
+Client (203.0.113.7) → Reverse Proxy → Backend
+
+Request the backend actually receives:
+  GET /api/orders HTTP/1.1
+  Host: internal-service:8080
+  X-Forwarded-For: 203.0.113.7        ← original client IP
+  X-Forwarded-Proto: https             ← original protocol (before TLS termination)
+  X-Real-IP: 203.0.113.7
+  Via: 1.1 nginx-edge-1
+```
+
+<Callout type="warning">
+**`X-Forwarded-For` is trivially spoofable by anyone who can talk to the backend directly.** If your application trusts this header for rate limiting, IP allow-listing, or fraud checks, an attacker who bypasses the proxy (or is already inside the network) can put any IP they want in that header. The fix: only trust `X-Forwarded-For` when the request is confirmed to have come through your known proxy/LB layer (check the immediate connecting IP against a trusted list), and always take the *first* IP in the chain, not the last, since each hop appends its own entry.
+</Callout>
+
+**2. A forward proxy can't inspect encrypted HTTPS traffic the normal way** — it doesn't have the server's private key, so it can't terminate and re-encrypt like a reverse proxy does. Instead, HTTPS through a forward proxy uses the **`CONNECT` method**: the client asks the proxy to open a raw TCP tunnel to the destination, then the TLS handshake happens *through* that tunnel, directly between client and origin server. The proxy relays encrypted bytes it cannot read — it only knows the destination host and port, not the URL path or content.
+
+```
+Client → Proxy: CONNECT example.com:443 HTTP/1.1
+Proxy → Client: HTTP/1.1 200 Connection Established
+              (proxy now blindly forwards raw bytes both ways)
+Client <───── TLS handshake happens here, proxy can't see inside ─────> example.com
+```
+
+This is why corporate/school content filters that need to inspect HTTPS traffic have to install their own root CA certificate on managed devices and perform a **TLS man-in-the-middle** — otherwise a forward proxy is blind to anything past the `CONNECT` line.
+
+---
+
+## Proxy vs Load Balancer vs API Gateway
+
+These three get conflated constantly because a single piece of software (Nginx, Envoy) can play all three roles at once — but the *concepts* are distinct:
+
+| | Proxy (Reverse) | Load Balancer | API Gateway |
+|---|---|---|---|
+| Primary job | Hide/front one or more backend servers | Distribute traffic across *multiple* healthy instances | Manage cross-cutting API concerns (auth, rate limits, routing, transformation) |
+| Minimum backends | Works with just one server | Requires multiple instances to be meaningful | Can front one service or many |
+| Decision logic | Usually none — just forwards | Algorithmic (round robin, least connections, etc.) | Business/API-level (per-route auth, versioning, quotas) |
+| Layer | L4 or L7 | L4 or L7 | Always L7 (understands HTTP semantics) |
+
+**In practice:** a reverse proxy that load-balances across backends *is* a load balancer. A load balancer that also authenticates requests, applies per-client rate limits, and transforms responses *is* an API gateway. They form a spectrum of added responsibility on top of the same core "intercept and forward" mechanism, not three unrelated tools — pick the term that describes the *most sophisticated* thing the component is doing.
+
+---
+
+## Proxy Software in Practice
+
+| Software | Typical role | Notes |
+|---|---|---|
+| **Nginx** | Reverse proxy, load balancer, static file server | The default choice for most stacks; simple config, huge community |
+| **HAProxy** | L4/L7 load balancer | Extremely high performance, the standard for pure load-balancing at scale |
+| **Envoy** | Service mesh sidecar proxy, edge proxy | Built for microservices — dynamic config via APIs, deep observability, used by Istio |
+| **Squid** | Forward proxy | Classic corporate/ISP web caching and content filtering |
+| **Varnish** | Reverse proxy / HTTP cache | Specialized almost entirely around caching, extremely fast cache hits |
+| **Traefik** | Reverse proxy | Auto-discovers backends in container/Kubernetes environments |
+
+---
+
+## Common Pitfalls
+
+- **Trusting `X-Forwarded-For` blindly** (see above) — the most common real-world security gap involving proxies.
+- **Forgetting to forward the `Host` header correctly**, which breaks name-based virtual hosting or any backend logic that reads `Host` to decide behavior (multi-tenant apps routing by subdomain are especially prone to this).
+- **Double proxying doubling latency invisibly** — CDN → reverse proxy → API gateway → service mesh sidecar → app is a real production chain; each added hop is small individually but the sum shows up as unexplained tail latency if nobody's tracing the whole path.
+- **Caching at the proxy layer without considering per-user data** — a reverse proxy cache that doesn't vary by `Authorization` header or session cookie can leak one user's personalized response to another.
+
+---
+
+## Proxy Use Cases
+
+| Use Case | Proxy Type | Description |
+| --- | --- | --- |
+| **Caching** | Reverse proxy | Cache static assets, API responses |
+| **Security** | Reverse proxy | WAF, DDoS protection, IP filtering |
+| **Logging** | Reverse proxy | Centralized access logging |
+| **Load Balancing** | Reverse proxy | Distribute traffic across servers |
+| **Anonymity** | Forward proxy | Hide client IP |
+| **Content Filtering** | Forward proxy | Block inappropriate content |
+| **SSL Termination** | Reverse proxy | Handle HTTPS encryption |
+
+## Final Mental Model
+
+```
+Forward Proxy  = hides CLIENT
+Reverse Proxy  = hides SERVER
+Load Balancer  = spreads traffic
+API Gateway    = smart manager for APIs
+High Availability = system survives failures
+```
+
+**For MERN/backend interviews, the most important practical combo is:**
+
+```
+Cloudflare → Nginx (reverse proxy + LB) → Node.js instances → Redis + DB
+```
+
+This is very close to real production architecture.
+
+---
+
+## Interview Tips
+
+> "A reverse proxy protects and optimizes access to servers; a forward proxy protects and controls access for clients. Same mechanism, opposite side of the trust boundary."
+
+> "If asked how a backend gets the real client IP behind a proxy, mention `X-Forwarded-For` — and proactively mention it's spoofable unless you trust only the immediate hop."
+
+> "Nginx, HAProxy, and Envoy can all act as reverse proxies, load balancers, or API gateways depending on configuration — naming the *role* you need (SSL termination, traffic distribution, per-route auth) is more important than naming a specific product."
+
+> "If someone asks how a proxy can filter HTTPS traffic it can't decrypt: it can't, unless it's doing TLS interception with its own installed root CA — otherwise it only sees the `CONNECT` destination, never the path or body."
+
+---

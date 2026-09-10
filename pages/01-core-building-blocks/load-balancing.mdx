@@ -1,0 +1,499 @@
+---
+title: Load Balancing
+---
+
+import { Callout } from 'nextra/components'
+
+# 1.4 Load Balancing
+
+> Load balancing distributes incoming traffic across multiple servers to ensure no single server becomes overwhelmed. Think of load balancer = traffic police for servers.
+
+**Without load balancing:**
+
+```
+10,000 users → Server A 💥 (overloaded, crashes)
+```
+
+**With load balancing:**
+
+```
+10,000 users → Load Balancer → S1 / S2 / S3 (traffic distributed)
+```
+
+Result: Higher availability, better scalability, fault tolerance, no single server overload.
+
+**Real request flow:** When user hits `api.myapp.com`, DNS points to load balancer → User → Load Balancer → Chooses server → App server. User doesn't know which server handled request.
+
+## 1.4.1 Load Balancer Types
+
+### Layer 4 (Transport) Load Balancing
+
+Operates at TCP/UDP level. Only sees IP address and port number — does NOT inspect HTTP request content.
+
+```
+User → L4 Load Balancer → Chooses TCP connection → Server
+```
+
+**Why fast?** No request parsing, no HTTP inspection. Just: packet in → route. Very lightweight.
+
+**Use case:** High throughput systems — gaming servers, video streaming, TCP services, databases, WebSockets.
+
+**Examples:** HAProxy (TCP mode), AWS NLB (Network Load Balancer).
+
+### Layer 7 (Application) Load Balancing
+
+Operates at HTTP/HTTPS level. This one is smart — can inspect headers, cookies, URL path, query params, host, JWT, content type.
+
+**Path-Based Routing (very common in microservices):**
+
+```
+/api/*       → Backend service
+/images/*    → CDN
+/admin/*     → Admin service
+```
+
+**SSL Termination:** Instead of every server decrypting HTTPS, LB handles it:
+
+```
+User (HTTPS) → Load Balancer decrypts → Server (HTTP)
+```
+
+Called SSL termination — reduces app server work.
+
+**Examples:** Nginx, HAProxy (HTTP mode), AWS ALB (Application Load Balancer).
+
+**L4 vs L7 Quick Difference:**
+
+|  | L4 | L7 |
+| --- | --- | --- |
+| Layer | TCP/UDP | HTTP |
+| Speed | Faster | Slightly slower |
+| Smart routing | No | Yes |
+| URL-based routing | No | Yes |
+| SSL termination | Limited | Yes |
+| Best for | Raw throughput | Web apps |
+
+Simple memory trick: **L4 = Fast but dumb, L7 = Smart but heavier.**
+
+### Hardware vs Software Load Balancers
+
+| Aspect | Hardware LB | Software LB |
+| --- | --- | --- |
+| Cost | Expensive ($$$) | Free/Open-source |
+| Performance | Very high (dedicated hardware) | High (commodity servers) |
+| Flexibility | Limited | Highly configurable |
+| Scalability | Scale up (bigger hardware) | Scale out (add more servers) |
+| Examples | F5, Citrix NetScaler | Nginx, HAProxy, Envoy |
+
+### Cloud Load Balancers
+
+| Cloud | L4 LB | L7 LB |
+| --- | --- | --- |
+| AWS | NLB | ALB |
+| GCP | Network LB | HTTP(S) LB |
+| Azure | Azure LB | Application Gateway |
+
+**Why Health Checks Matter:** Load balancer continuously checks `/health`. If server dead, LB removes it from pool and routes only to healthy servers. This is how fault tolerance works.
+
+---
+
+## 1.4.2 Load Balancing Algorithms
+
+### Round Robin
+
+Most basic. Rotate sequentially:
+
+```
+Req1 → A
+Req2 → B
+Req3 → C
+Req4 → A
+```
+
+**Best for:** Equal servers (e.g., 3 identical EC2 instances).
+
+**Problem:** What if Server A is weak and Server B is strong? Still gets equal traffic. Bad.
+
+### Weighted Round Robin
+
+Assign weights. Example: Server A = weight 1, Server B = weight 3. Traffic: A B B B A B B B — because B is stronger.
+
+**Best for:** Mixed server sizes (e.g., 2 CPU server + 8 CPU server).
+
+### Least Connections
+
+Route to server with fewest active requests.
+
+```
+A = 20 connections
+B = 5 connections  ← Route here
+C = 15 connections
+```
+
+**Best for:** Long-lived connections — video upload, WebSocket, chat, streaming. Round robin fails here because A might still be busy. Least connection adapts.
+
+**WebSocket example:** Server A = 500 active sockets, Server B = 100 sockets. New socket → Send to B.
+
+### Weighted Least Connections
+
+Same idea + server power. Balances smarter by considering both connection count and server capacity.
+
+### IP Hash (Sticky Sessions)
+
+Hash client IP → same user always goes to same server.
+
+```
+1.2.3.4 → Server B (always)
+```
+
+**Why?** If session stored in RAM on Server A, user must return to same server or session is lost.
+
+**Problem:** Bad for scaling. If server crashes, session gone. Modern apps avoid this — instead use Redis, Database, or JWT for sessions. Then any server can handle request (stateless architecture). Much better.
+
+### Consistent Hashing
+
+Very important for distributed systems. Instead of IP: hash request key.
+
+```
+user:123 → Server B
+user:456 → Server A
+```
+
+**Why useful?** For caching. Same key → same server → higher cache hit rate. Used in: Redis clusters, CDNs, distributed cache.
+
+### Least Response Time
+
+Choose fastest server:
+
+```
+A = 50ms
+B = 10ms  ← Choose this
+C = 20ms
+```
+
+**Best for:** Latency-sensitive systems.
+
+### Health Checks
+
+Load balancer continuously checks `/health`. If server dead, LB removes it from pool. Only routes to healthy servers. This is how fault tolerance works.
+
+**Real-world MERN Example:**
+
+```
+hotel-booking.com:
+Users → Cloudflare CDN → AWS ALB (L7)
+  → /api/* → backend
+  → /admin/* → admin
+  → Least connections for WebSocket notifications/chat
+```
+
+**Interview shortcut — which algorithm to choose?**
+
+- Equal servers → Round Robin
+- Unequal servers → Weighted RR
+- WebSockets/long requests → Least Connections
+- Session memory → IP Hash
+- Cache cluster → Consistent Hashing
+- Low latency → Least Response Time
+
+---
+
+## 1.4.3 Reverse Proxy vs Forward Proxy
+
+This section confuses many people because reverse proxy, load balancer, API gateway, and proxies overlap a lot.
+
+The easiest way:
+
+Ask: **"Who is being protected/hidden?"**
+
+- Hide client → Forward Proxy
+- Hide server → Reverse Proxy
+
+That single idea makes everything easier.
+
+### 1. Reverse Proxy
+
+A reverse proxy sits in front of servers. Client thinks it's talking to the server, but reality is:
+
+```
+Client → Reverse Proxy → Backend
+```
+
+The client does not know backend servers exist.
+
+**Example: Your MERN App**
+
+Suppose `hotel-booking.com` has backend:
+
+```
+Node1: localhost:5000
+Node2: localhost:5001
+Node3: localhost:5002
+```
+
+You don't expose these directly. Instead:
+
+```
+Internet
+   |
+Nginx Reverse Proxy
+   |
+---------------
+|      |      |
+5000  5001   5002
+```
+
+User only sees `hotel-booking.com`, not `123.45.67.89:5001`.
+
+**Why use reverse proxy?** Because it does many things before request reaches backend. Think: Smart gatekeeper.
+
+#### 1. SSL Termination
+
+Without reverse proxy, every Node server handles HTTPS (heavy CPU work):
+
+```
+Client HTTPS → Node Server decrypts
+```
+
+Instead:
+
+```
+Client HTTPS → Nginx decrypts SSL → Node app gets HTTP
+```
+
+This is SSL termination — backend becomes simpler and faster. Nginx handles cert on port 443.
+
+#### 2. Load Balancing
+
+Reverse proxy distributes traffic so one server doesn't die:
+
+```
+Nginx
+  / | \
+ A  B  C
+
+Round robin:
+Req1 → A
+Req2 → B
+Req3 → C
+```
+
+#### 3. Caching
+
+Suppose `/logo.png` is requested 1 million times. Instead of Node serving, Nginx caches it:
+
+```
+Client → Nginx Cache → (no backend hit)
+```
+
+Much faster.
+
+#### 4. Security Filtering
+
+Can block malicious traffic before backend gets hit:
+
+```
+IP: 1.2.3.4
+10000 req/sec → Nginx: 429 Too Many Requests
+```
+
+Can block: SQL injection attempts, suspicious headers, bad bots.
+
+#### 5. Request Rewriting
+
+Suppose frontend requests `/api/users`. Proxy changes it to `localhost:5000/users`:
+
+```nginx
+location /api {
+    proxy_pass http://backend;
+}
+```
+
+Very common.
+
+**Reverse proxy examples:** Nginx, HAProxy, Envoy.
+
+### 2. Forward Proxy
+
+This sits in front of clients. Server thinks it's talking to client, but reality is:
+
+```
+Client → Forward Proxy → Server
+```
+
+Server never sees real client.
+
+**Example: Corporate Office**
+
+Company blocks social media:
+
+```
+Employees → Corporate Proxy → Internet
+
+facebook.com → Blocked ❌
+github.com → Allowed ✅
+```
+
+**Example: VPN**
+
+```
+Without VPN:
+You → Website → Website sees your real IP
+
+With VPN:
+You → VPN → Website → Website sees VPN IP (you hidden)
+```
+
+This is basically a forward proxy.
+
+**Example: Tor**
+
+```
+You → Node1 → Node2 → Node3 → Website
+Website cannot know original IP. Used for anonymity.
+```
+
+### Difference (Easy Memory Trick)
+
+```
+Forward Proxy  → Protects CLIENT identity → Client hidden → Example: VPN
+Reverse Proxy  → Protects SERVER identity → Server hidden → Example: Nginx in production
+```
+
+**Visual:**
+
+```
+Forward Proxy:
+You → Proxy → Internet
+
+Reverse Proxy:
+Internet → Proxy → Servers
+```
+
+### API Gateway vs Reverse Proxy vs Load Balancer
+
+This is where people get confused. Because they overlap — same tool can do multiple jobs. Example: Nginx can be reverse proxy + load balancer + cache + SSL terminator.
+
+#### 1. Load Balancer
+
+**Focus:** Traffic distribution. **Goal:** Don't overload one server.
+
+```
+Users → LB → A / B
+```
+
+Main responsibility: distribute traffic. Usually dumb/simple.
+
+#### 2. Reverse Proxy
+
+**Focus:** Request handling/protection. Can do: SSL, cache, filtering, rewrite, load balancing.
+
+Think: Smart middleman.
+
+#### 3. API Gateway
+
+**Focus:** Manage APIs in microservices.
+
+Without gateway, frontend makes 5 separate calls to /auth, /payment, /hotel, /reviews, /notification. Messy.
+
+Instead:
+
+```
+Frontend → API Gateway → Auth / Payment / Hotel
+```
+
+Single entry point.
+
+**What API Gateway adds:**
+
+| Feature | How It Works |
+| --- | --- |
+| **Authentication** | Check JWT before request reaches service. No token → Reject |
+| **Rate Limiting** | 100 req/min. Exceeded → 429 Too Many Requests. Prevents abuse |
+| **Advanced Routing** | Route based on path, headers, method. POST /payments → Payment service, GET /users → User service |
+| **Response Aggregation** | Gateway fetches user + hotel + booking, returns one response to frontend (instead of 3 separate requests) |
+
+**API Gateway examples:** AWS API Gateway, Kong, Envoy.
+
+---
+
+## 1.4.4 High Availability
+
+Goal: System stays alive even when servers fail. Very important in production.
+
+### 1. Active-Passive Setup
+
+One server works. Other waits.
+
+```
+Primary DB ✅
+Backup DB 😴
+
+Users → Active Server (handles all traffic)
+         Passive Server (sync data)
+
+If active dies → Passive becomes active (Failover)
+```
+
+**Real example:** Database replication. Primary PostgreSQL + Replica PostgreSQL. If primary crashes → Replica promoted.
+
+**Problem:** Wasteful. Passive server is mostly idle but still costs money.
+
+### 2. Active-Active Setup
+
+All servers handle traffic simultaneously:
+
+```
+LB → A / B / C (all active)
+```
+
+**Example:** Node.js backend with 3 EC2 instances. All active. If one dies → traffic goes to remaining servers. No downtime.
+
+**Challenge:** Data sync. If user updates profile, it must reflect across all servers. This is why: sessions in Redis, database shared (not local memory).
+
+### Health Checks
+
+How does LB know server is dead? It keeps asking: `GET /health`
+
+```
+Every 10 sec:
+  200 OK → Healthy ✅
+  Timeout / 500 error → Dead ❌ → Remove server
+```
+
+**Express Example:**
+
+```javascript
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+```
+
+**Types:**
+
+| Type | How It Works |
+| --- | --- |
+| **HTTP Health Check** | GET /health returns 200. Most common |
+| **TCP Health Check** | Can connection open on port 5000? If yes → healthy |
+| **Custom Health Check** | Check DB connected? Redis working? Memory okay? Much smarter |
+
+```json
+{
+  "db": "connected",
+  "redis": "connected"
+}
+```
+
+### Failover Mechanism
+
+When server crashes:
+
+```
+Step 1: Health check fails. Server B ❌
+Step 2: LB removes it. Before: A B C → After: A C
+Step 3: Traffic redistributed. Users continue.
+```
+
+**Active-passive case:** Passive promoted (Backup → Primary). Minimal downtime.
+
+---

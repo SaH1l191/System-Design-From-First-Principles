@@ -1,0 +1,124 @@
+---
+title: Interview Cheat Sheet — Stage 1
+---
+
+import { Callout } from 'nextra/components'
+
+# Quick Reference: Stage 1 Decision Framework
+
+## API Selection
+
+```
+Public API, simple CRUD → REST
+Complex frontend data needs → GraphQL
+Internal microservices, high performance → gRPC
+```
+
+## Database Selection
+
+```
+Structured data, ACID transactions, complex queries → SQL
+Flexible schema, massive write throughput → NoSQL (Document/Wide-Column)
+Social graph, recommendations → Graph DB
+Time-series data, metrics → Time-Series DB
+Caching, sessions → Key-Value (Redis)
+```
+
+## Caching Strategy
+
+```
+Most workloads → Cache-Aside (Lazy Loading)
+Write-heavy, need consistency → Write-Through
+Write-heavy, can tolerate slight delay → Write-Behind
+```
+
+## Load Balancer Selection
+
+```
+Simple traffic distribution → Round Robin
+Mixed server capacities → Weighted Round Robin
+Long-lived connections → Least Connections
+Session persistence → IP Hash (or use external session store)
+```
+
+## Proxy Selection
+
+```
+Protect backend servers → Reverse Proxy
+Anonymize clients → Forward Proxy
+Both → Reverse proxy (most common in system design)
+```
+
+---
+
+# Interview Cheat Sheet: Stage 1
+
+## APIs
+
+- REST: Stateless, resource-oriented, HTTP methods, status codes
+- GraphQL: Client queries exact fields, no over-fetching
+- gRPC: Binary Protobuf, HTTP/2, streaming, 5-10x faster than REST
+- API Gateway: Single entry point, auth, rate limiting, routing
+- Pagination: Cursor-based for large datasets (constant-time, no drift); Offset for small datasets (simpler, allows page jumping)
+- N+1 Problem: Fetching related data in a loop creates 1+N queries — fix with JOINs, batching, or DataLoader
+
+## Databases
+
+- SQL: ACID, joins, normalization, vertical scaling
+- NoSQL: Eventual consistency, denormalization, horizontal scaling
+- B+ Tree indexes: O(log n) lookups, range queries, node splits on insert, borrow/merge on delete
+- Hash indexes: O(1) exact-match only, no range queries
+- Composite indexes: Leftmost prefix rule (order matters)
+- LSM Trees: Write-optimized, used by Cassandra
+- EXPLAIN ANALYZE: Shows Index Scan (good) vs Seq Scan (bad)
+- N+1 Problem: Fix with JOINs, batching (IN), DataLoader, eager loading
+- Always index foreign keys used in JOINs
+
+## Caching
+
+- Cache-Aside: Most common, app manages cache
+- Redis: Rich data structures, persistence, replication
+- Cache invalidation: TTL, event-based, version-based
+- Cache stampede: Locking, probabilistic refresh, background refresh
+
+## Load Balancing
+
+- L4: TCP/UDP, fast, simple
+- L7: HTTP, smart routing, content-based
+- Round Robin: Simple, equal distribution
+- Least Connections: Best for long-lived connections
+- Active-Active: Both servers handle traffic
+- Active-Passive: One handles, one standby
+
+## Proxies
+
+- Forward: In front of client (anonymize, filter)
+- Reverse: In front of server (cache, SSL, load balance)
+- Most system design: Reverse proxy is the default answer
+
+---
+
+*Stage 1 covers the core building blocks. Every system design problem uses these concepts. Master these before moving to Stage 2: Scalability & Performance.*
+
+---
+
+## Remaining Topics (Stage 0 / Stage 1 Extras)
+
+The following topics are covered in Stage 0 (Prerequisites) or are supplementary to Stage 1:
+
+| Topic | Stage | Notes |
+| --- | --- | --- |
+| WebSocket | 0 | Full-duplex communication over TCP |
+| OAuth 2.0 | 0/7 | Authorization framework (Authorization Code, Client Credentials, etc.) |
+| JWT | 0/7 | JSON Web Token — stateless token-based auth |
+| SSH | 0 | Secure Shell — encrypted remote access |
+| AMQP / Kafka | 4 | Message queue protocols (covered in Stage 4) |
+| IP (IPv4/IPv6) | 0 | Network addressing (covered in Stage 0 Networking) |
+| DNS | 0 | Domain Name System (covered in Stage 0) |
+| TLS/SSL | 0/7 | Encryption in transit (covered in Stage 0 & Stage 7) |
+
+*These are prerequisites and will be covered in Stage 0 or in their respective stages.*
+
+---
+
+*Sources: ByteByteGo, DesignGurus.io, DDIA (Martin Kleppmann), system-design-primer, Netflix/Uber/LinkedIn engineering blogs, various system design courses and resources, HTTP RFCs, MDN Web Docs.*
