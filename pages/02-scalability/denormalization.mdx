@@ -1,0 +1,211 @@
+---
+title: Denormalization
+---
+
+import { Callout } from 'nextra/components'
+
+# Denormalization
+
+> Denormalization intentionally introduces redundant data into a normalized database to improve read performance at the cost of write complexity and storage. It's the opposite of normalization — and it's the right choice when read performance matters more than write simplicity.
+
+## When to Denormalize
+
+| Signal | Action |
+| --- | --- |
+| Read:write ratio &gt; 10:1 | Denormalize the hot path |
+| Read:write ratio &gt; 50:1 | Strongly consider denormalization |
+| Read:write ratio &lt; 10:1 | Stay normalized |
+| Query joins 4+ large tables on hot path | Denormalize |
+| Query latency SLA &lt; 100ms | After exhausting indexes + caching |
+| Data is immutable/append-only | Denormalize safely |
+
+## The Normalization vs Denormalization Trade-off
+
+```
+NORMALIZED (3NF)                     DENORMALIZED
+┌──────────┐                        ┌──────────────────────┐
+│ users    │                        │ users_with_orders    │
+│ ┌───┬──┐ │                        │ ┌───┬──┬──────┬───┐ │
+│ │ID │N │ │                        │ │ID │N │orders│$  │ │
+│ └───┴──┘ │                        │ └───┴──┴──────┴───┘ │
+└──────────┘                        └──────────────────────┘
+┌──────────┐                        
+│ orders   │                        Joins: NONE ✅
+│ ┌───┬──┐ │                        Read speed: FAST ✅
+│ │ID │$ │ │                        Write speed: SLOW ❌
+│ └───┴──┘ │                        Storage: MORE ❌
+└──────────┘                        Consistency: RISKY ❌
+┌──────────┐
+│ products │
+│ ┌───┬──┐ │
+│ │ID │P │ │
+│ └───┴──┘ │
+└──────────┘
+
+Joins: REQUIRED ❌
+Read speed: SLOW ❌
+Write speed: FAST ✅
+Storage: LESS ✅
+Consistency: SAFE ✅
+```
+
+## Implementation Approaches
+
+### 1. Materialized Views
+
+Database-managed cached query results with explicit refresh policies.
+
+```sql
+-- PostgreSQL: Create materialized view
+CREATE MATERIALIZED VIEW user_order_summary AS
+SELECT 
+    users.id as user_id,
+    users.name,
+    COUNT(orders.id) as total_orders,
+    SUM(orders.total) as total_spent,
+    MAX(orders.created_at) as last_order_date
+FROM users
+JOIN orders ON users.id = orders.user_id
+GROUP BY users.id, users.name;
+
+-- Refresh (must be done manually or via cron)
+REFRESH MATERIALIZED VIEW CONCURRENTLY user_order_summary;
+
+-- Query is instant (no joins needed)
+SELECT * FROM user_order_summary WHERE user_id = 42;
+```
+
+**Pros:** Query performance is excellent (pre-computed). Database manages consistency. **Cons:** Must refresh manually or via cron. Stale between refreshes.
+
+### 2. Aggregated/Summary Tables
+
+Permanent copies of joined/aggregated data maintained by application code or triggers.
+
+```sql
+CREATE TABLE user_order_summary (
+    user_id BIGINT PRIMARY KEY,
+    total_orders INT,
+    total_spent DECIMAL(12,2),
+    last_order_date TIMESTAMP
+);
+
+-- Updated by triggers or application code on each order
+CREATE OR REPLACE FUNCTION update_user_summary()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO user_order_summary (user_id, total_orders, total_spent, last_order_date)
+    VALUES (NEW.user_id, 1, NEW.total, NEW.created_at)
+    ON CONFLICT (user_id) DO UPDATE SET
+        total_orders = user_order_summary.total_orders + 1,
+        total_spent = user_order_summary.total_spent + NEW.total,
+        last_order_date = GREATEST(user_order_summary.last_order_date, NEW.created_at);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### 3. Application-Level Duplication
+
+Your application code explicitly writes to multiple tables.
+
+```python
+def create_order(order):
+    # Write to normalized orders table
+    db.insert("orders", order)
+    
+    # Also update denormalized summary (same transaction)
+    db.execute("""
+        UPDATE user_order_summary 
+        SET total_orders = total_orders + 1,
+            total_spent = total_spent + %s,
+            last_order_date = NOW()
+        WHERE user_id = %s
+    """, (order.amount, order.user_id))
+```
+
+### 4. The Modern Pattern: CDC-Fed Projections
+
+```
+┌──────────────┐     CDC (Debezium)     ┌─────────────────┐
+│ Normalized   │ ─────────────────────→ │ Denormalized    │
+│ OLTP Source  │     (Kafka)            │ Read Projections│
+│ (3NF)       │                         │                 │
+└──────────────┘                         │ - Search index  │
+     Writes stay correct                 │ - Feed cache    │
+     Reads stay fast                     │ - Analytics DW  │
+                                         └─────────────────┘
+                                          Each projection is
+                                          disposable & rebuildable
+```
+
+**How it works:**
+
+1. Application writes to normalized database (source of truth)
+2. CDC (Change Data Capture) captures changes via WAL/binlog
+3. Changes stream to Kafka
+4. Projections consume changes and build denormalized views
+5. Each projection is optimized for a specific query pattern
+
+**Pros:** Source of truth stays normalized. Read models are optimized. Projections are rebuildable. **Cons:** Eventual consistency. Complexity of CDC infrastructure.
+
+## Real-World Examples
+
+### Instagram
+
+```
+Normalized: users, posts, likes, comments (source of truth)
+Denormalized: 
+  - Feed cache (Redis): Pre-computed news feeds
+  - Search index (Elasticsearch): Full-text search
+  - Analytics (Redshift): Aggregated metrics
+```
+
+### Twitter
+
+```
+Normalized: users, tweets, follows (source of truth)
+Denormalized:
+  - Timeline cache (Manhattan): Pre-computed user timelines
+  - Tweet fan-out: Write fan-out to followers' timelines
+  - Search index: Full-text search
+```
+
+### Discord
+
+Discord migrated from MongoDB to Cassandra for message storage:
+
+- Messages are append-only (perfect for denormalization)
+- Each channel has its own partition (natural shard key)
+- Reads are fast (single partition scan)
+
+## Trade-offs
+
+| Aspect | Normalized | Denormalized |
+| --- | --- | --- |
+| **Read performance** | Slower (JOINs) | Faster (pre-joined) |
+| **Write performance** | Faster (one place) | Slower (multiple places) |
+| **Storage** | Less | More (redundant data) |
+| **Consistency** | Strong | Eventual (if async) |
+| **Complexity** | Lower | Higher |
+| **Update anomalies** | None | Risk of inconsistency |
+
+<Callout type="info">
+**Interview Tip:** "Start with 3NF. Denormalize only when a production query proves the JOIN cost > insertion-time replication cost. Premature denormalization is the #1 schema-design mistake — it doubles write amplification AND creates data-integrity bugs."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The hybrid pattern (normalized core + CDC-fed projections) is the modern default at scale. It gives you the best of both worlds."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Denormalization is not a replacement for indexing. Index first, cache second, denormalize third."
+</Callout>
+
+---
+
+## Further Reading
+
+- [DDIA Chapter 3: Storage and Retrieval](https://dataintensive.net/)
+- [CQRS and Event Sourcing](https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf)
+- [Martin Kleppmann: Turning the database inside-out](https://www.youtube.com/watch?v=fUZTqNF-0vU)
+- [Debezium Documentation](https://debezium.io/documentation/)

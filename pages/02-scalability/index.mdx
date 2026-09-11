@@ -1,0 +1,36 @@
+---
+title: Scalability & Performance
+---
+
+# Scalability & Performance
+
+> The ability of a system to handle increased load without degrading performance.
+
+Once you have the building blocks, the next question is: how do you make them handle millions of users? This stage covers the fundamental scaling strategies and the tradeoffs each one carries.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **Horizontal vs Vertical** | When to scale up vs scale out, limits of each |
+| **Sharding** | Hash, range, directory-based, geo-based, consistent hashing |
+| **Partitioning** | Horizontal vs vertical partitioning, when it differs from sharding |
+| **Database Replication** | Single-leader, multi-leader, leaderless, sync vs async |
+| **Consistent Hashing** | Hash ring, virtual nodes, rebalancing |
+| **Rate Limiting** | Token bucket, leaky bucket, sliding window |
+| **Denormalization** | When to break normalization, tradeoffs |
+
+---
+
+## The Core Tradeoff
+
+Scaling is never free. Every strategy trades one problem for another:
+
+- Vertical scaling → cost grows exponentially, hardware ceiling
+- Horizontal scaling → state must be externalized, distributed systems problems
+- Sharding → cross-shard queries become expensive
+- Replication → consistency vs availability tension
+
+Understanding these tradeoffs is what separates a good answer from a great one in interviews.

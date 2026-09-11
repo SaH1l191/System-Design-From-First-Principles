@@ -1,0 +1,374 @@
+---
+title: Database Replication
+---
+
+import { Callout } from 'nextra/components'
+
+# Database Replication
+
+> Replication keeps N copies of your data on N nodes for fault tolerance, read throughput, and low-latency reads near users. The choice between single-leader, multi-leader, and leaderless replication determines your consistency guarantees and failure modes.
+
+## Three Replication Topologies
+
+```
+SINGLE-LEADER               MULTI-LEADER              LEADERLESS
+
+  Client                     Client                   Client
+    │                          │                        │
+    ▼                          ▼                   ┌────┴────┐
+┌────────┐                 ┌────────┐              │    │    │
+│Leader  │ ← All writes    │Leader A│ ←→ │Leader B│  R1  R2  R3
+└───┬────┘                 └───┬────┘      └───┬────┘  (quorum)
+    │ async                     │               │
+┌───┴───┐ ┌───┐           ┌───┴───┐ ┌───┐   ┌──┴───┐
+│Follow1│ │F2 │           │F1     │ │F2 │   │ ...  │
+│Follow2│ │F3 │           │F3     │ │F4 │   └──────┘
+└───────┘ └───┘           └───────┘ └───┘
+```
+
+## Single-Leader Replication
+
+One node (leader) handles all writes. Followers (replicas) receive copies of writes and handle reads.
+
+### How It Works
+
+```
+1. Application writes to Leader
+2. Leader writes to local disk
+3. Leader sends change to Followers (via WAL stream or binlog)
+4. Followers apply changes
+5. Application reads from Followers
+```
+
+### Synchronous vs Asynchronous Replication
+
+| Mode | Write Latency | Data Loss Risk | Throughput | Use Case |
+| --- | --- | --- | --- | --- |
+| **Synchronous** | High (waits for replica ack) | None | Low | Financial systems, strong consistency |
+| **Asynchronous** | Low (returns immediately) | Yes (replica lag window) | High | Most OLTP workloads |
+| **Semi-synchronous** | Medium (waits for ≥1 replica) | Minimal | Medium | Balanced approach |
+
+#### Synchronous Replication
+
+```
+Client → Leader → Write to disk
+                → Send to Follower 1
+                → Wait for ack ←── Follower 1: "OK, written"
+                → Send to Follower 2
+                → Wait for ack ←── Follower 2: "OK, written"
+                → Return "success" to client
+```
+
+**Pros:** No data loss, strong consistency. **Cons:** High latency (waits for all replicas), low throughput.
+
+#### Asynchronous Replication
+
+```
+Client → Leader → Write to disk → Return "success" to client
+                → (background) Send to Followers
+```
+
+**Pros:** Low latency, high throughput. **Cons:** Data loss window (if leader crashes before replication).
+
+#### Semi-Synchronous Replication
+
+```
+Client → Leader → Write to disk
+                → Send to Follower 1
+                → Wait for ack ←── Follower 1: "OK"
+                → Return "success" to client
+                → (background) Send to Follower 2
+```
+
+**Pros:** Balance of consistency and performance. **Cons:** If the synchronous replica dies, system degrades.
+
+### Replication Lag
+
+**Problem:** With async replication, replicas may be seconds behind the primary.
+
+```
+Timeline:
+  T1: User updates profile (name = "Alice Johnson")
+  T2: Primary confirms write (1ms)
+  T3: User immediately refreshes page
+  T4: Read goes to Replica (still has old name "Alice") ← Stale read!
+  T5: Replica receives update (now has "Alice Johnson") ← 50ms later
+```
+
+**Mitigations:**
+
+1. **Read-your-own-writes:** After a write, route reads to primary for 1-2 seconds
+2. **Sticky sessions:** Same user always reads from same replica
+3. **Causal consistency:** Attach version vectors to requests
+4. **Sync replication:** Higher latency but no lag
+
+### PostgreSQL Replication Example
+
+```sql
+-- On Primary
+-- postgresql.conf
+wal_level = replica
+max_wal_senders = 10
+wal_keep_size = 1024
+
+-- pg_hba.conf
+host replication replica_user 10.0.0.0/8 md5
+
+-- On Replica
+-- postgresql.conf
+primary_conninfo = 'host=primary port=5432 user=replica_user password=secret'
+
+-- Create replication slot
+SELECT pg_create_physical_replication_slot('replica_slot');
+```
+
+## Multi-Leader Replication
+
+Multiple nodes can accept writes. Each leader replicates to all other leaders.
+
+This topic is really about two different philosophies:
+
+```
+Leader-based systems:      Multi-leader systems:
+    Primary                 US Leader  ←→  EU Leader
+   /   |   \               Both accept writes.
+  R1   R2   R3             Conflict resolution becomes the main problem.
+One node decides truth.
+```
+
+### When to Use Multi-Leader
+
+- **Geo-distributed write availability:** Users in US and Europe both need to write
+- **Active-active data centers:** Both data centers handle writes independently
+- **Offline-first applications:** Mobile apps that sync when online
+
+### The Conflict Problem
+
+**Example: Collaborative Profile Editing**
+
+Suppose your app stores User 42 with `Name = John`. Two people edit simultaneously:
+
+```
+US Region:  John → Alice
+EU Region:  John → Bob
+
+Before replication:
+  US Leader: Name = Alice
+  EU Leader: Name = Bob
+
+Both are valid.
+Now leaders sync.
+
+Question: Which is correct? Nobody knows.
+That's the core challenge of multi-leader replication.
+```
+
+### Conflict Resolution Strategies
+
+| Strategy | How It Works | Trade-off |
+| --- | --- | --- |
+| **Last-writer-wins (LWW)** | Wall-clock timestamp; latest wins | Cheap but clock skew silently loses writes |
+| **Merge function** | Application-level union of values | Works for some types, breaks for others |
+| **CRDTs** | Conflict-free replicated data types | Always converges; requires specific data structures |
+| **Version vectors** | Detect concurrent conflicts | Requires application-level resolution |
+
+### Last-Writer-Wins (LWW)
+
+Most common because it's simple. Every write gets a timestamp:
+
+```
+Alice @ 10:00:00.001
+Bob   @ 10:00:00.002
+
+Replication happens. System compares timestamps.
+Bob timestamp > Alice timestamp → Name = Bob
+
+Every replica converges to Bob.
+```
+
+<Callout type="warning">
+**Why LWW is dangerous — clock skew causes lost writes:**
+
+```
+US clock: 10:00:00.001
+EU clock: 09:59:59.999
+
+Real world sequence: Alice then Bob
+But timestamps say: Alice newer
+
+Result: Bob's update disappears forever.
+No error occurs. The system silently chooses the wrong answer.
+```
+</Callout>
+
+### CRDTs (Conflict-Free Replicated Data Types)
+
+CRDTs are designed so `Merge(A,B) = Merge(B,A)` — order doesn't matter, everyone eventually reaches the same answer.
+
+**G-Counter (Likes Counter):**
+
+```
+Instagram likes:
+  US: +5 likes → {US:5}
+  EU: +7 likes → {EU:7}
+
+If replicas overwrite each other: 5 or 7 (wrong, we want 12)
+
+G-Counter:
+  US: {US:5}
+  EU: {EU:7}
+  Merged: {US:5, EU:7} → Total: 12
+
+No conflicts. No lost updates.
+```
+
+**OR-Set (Collaborative Todo List):**
+
+```
+Alice adds: Buy milk
+Bob adds: Buy bread
+Concurrent operations.
+
+Merged result:
+  Buy milk
+  Buy bread
+
+Both survive. Even deletes are tracked carefully.
+```
+
+<Callout type="info">
+**Why CRDTs are powerful — offline-first:** Phone, Laptop, Tablet — all offline, all modify data. Days later, everything syncs. CRDT guarantees: All devices converge without central coordination. Popular in: collaborative editing, offline-first apps, distributed caches.
+</Callout>
+
+## Leaderless Replication
+
+No node is special. Any node can accept reads and writes. Data is replicated using quorum.
+
+```
+Node A
+Node B
+Node C
+
+All equal. Any node can accept writes.
+```
+
+### Quorum Consistency in Leaderless Systems
+
+**Define:**
+
+- **N** = total replicas
+- **W** = write quorum (replicas that must acknowledge a write)
+- **R** = read quorum (replicas that must be read)
+
+**Write quorum example (N=3, W=2):**
+
+```
+Client writes: email = new@gmail.com
+
+A = OK
+B = OK
+C = timeout
+
+Since W = 2 and two replicas succeeded:
+  → Write succeeds. No need to wait for all three.
+```
+
+**Read quorum example (N=3, R=2):**
+
+```
+Later someone reads: GET User:123
+
+A = new@gmail.com
+B = new@gmail.com
+C = old@gmail.com
+
+The system sees 2 copies = new, 1 copy = old
+→ Returns new@gmail.com
+```
+
+**Why R + W > N matters — the overlap rule:**
+
+The key rule is: `R + W > N`. If that's true, reads and writes must overlap on at least one replica.
+
+```
+N = 3, W = 2, R = 2
+2 + 2 > 3 ✓
+
+Write touched: A, B
+Read touches: B, C
+
+Common replica: B → Read sees at least one replica that knows about the latest write.
+```
+
+**Typical settings:**
+
+| Config | N | W | R | Behavior |
+| --- | --- | --- | --- | --- |
+| **Fast writes** | 3 | 1 | 3 | Write to one node only (cheap writes, expensive reads) |
+| **Fast reads** | 3 | 3 | 1 | Writes expensive, reads cheap |
+| **Balanced** | 3 | 2 | 2 | Most common |
+
+<Callout type="warning">
+**The catch:** Quorum doesn't guarantee perfect consistency. With a network partition or simultaneous writes, replicas may contain conflicting versions. Leaderless systems need extra mechanisms: timestamps (last-write-wins), version vectors, vector clocks, or conflict resolution logic.
+</Callout>
+
+### Dynamo-Style Replication
+
+Used by DynamoDB, Cassandra, Riak:
+
+```
+Client writes to Node A
+  → Node A forwards to B and C
+  → Client waits for W=2 acknowledgments
+  → Write succeeds
+
+Client reads from Node A
+  → Node A contacts B and C
+  → Client waits for R=2 responses
+  → Returns latest version (vector clock comparison)
+```
+
+### Sloppy Quorum + Hinted Handoff
+
+```
+Write to A, B, C (quorum)
+  → B is down
+  → System temporarily stores on D (sloppy quorum)
+  → Write: A, C, D instead of A, B, C
+  → Goal: Stay available even when intended replicas are unavailable
+
+When B recovers:
+  D remembers: "This write was for B"
+  D → B copies data (hinted handoff)
+  → B catches up
+```
+
+## Replication Comparison
+
+| Feature | Single-Leader | Multi-Leader | Leaderless |
+| --- | --- | --- | --- |
+| **Write availability** | Leader must be up | Multiple leaders | Any node accepts writes |
+| **Conflict resolution** | N/A (one leader) | Required | Required |
+| **Complexity** | Low | High | Medium |
+| **Consistency** | Strong (sync) or eventual (async) | Eventual | Quorum-based |
+| **Use case** | Most OLTP systems | Geo-distributed writes | High-availability, write-heavy |
+
+## Interview Tips
+
+<Callout type="info">
+"Single-leader with semi-sync replication is the default for most OLTP. Multi-leader is deceptively attractive — conflicts are always harder than they look. Only use multi-leader when you have proven geo-latency needs."
+</Callout>
+
+<Callout type="info">
+"The question to ask: 'What happens when the leader dies?' If the answer is 'reads continue but writes fail' — that's single-leader. If the answer is 'writes continue in another region' — that's multi-leader or leaderless."
+</Callout>
+
+---
+
+## Further Reading
+
+- [DDIA Chapter 5: Replication](https://dataintative.net/)
+- [Amazon Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+- [Cassandra Documentation](https://cassandra.apache.org/doc/latest/)
+- [PostgreSQL Streaming Replication](https://www.postgresql.org/docs/current/warm-standby.html)
+- [CRDTs: The Hard Parts](https://www.youtube.com/watch?v=x7drE24geUw) (Martin Kleppmann talk)

@@ -1,0 +1,217 @@
+---
+title: Consistent Hashing
+---
+
+import { Callout } from 'nextra/components'
+
+# Consistent Hashing
+
+> Consistent hashing maps both keys and servers onto a circular hash space (the ring). When a server is added or removed, only ~1/N of keys need to move — compared to near-total rehashing with modular hashing. This is the foundation of distributed caches, databases, and CDNs.
+
+## The Problem with Simple Hashing
+
+```
+Simple approach: server = hash(key) % N
+
+When N=4:
+  key: "user:42" → hash = 7 → 7 % 4 = 3 → Server 3
+  key: "user:99" → hash = 15 → 15 % 4 = 3 → Server 3
+  key: "user:100" → hash = 22 → 22 % 4 = 2 → Server 2
+
+When N=4 → N=5 (add one server):
+  key: "user:42" → hash = 7 → 7 % 5 = 2 → Server 2 (MOVED!)
+  key: "user:99" → hash = 15 → 15 % 5 = 0 → Server 0 (MOVED!)
+  key: "user:100" → hash = 22 → 22 % 5 = 2 → Server 2 (same)
+
+Result: ~80% of keys map to a different server
+  = 80% cache miss storm
+  = potential cascading failure
+```
+
+## How Consistent Hashing Works
+
+```
+Hash Ring (0 to 2^32-1)
+
+        ┌─── Server B
+        │
+   ─────●────────────●────────────●─────
+       /            /            /
+      /            /            /
+     /            /            /
+    ●            ●            ●
+Server A      Key X        Server C
+
+To find which server owns a key:
+1. Hash the key to a position on the ring
+2. Walk clockwise until you hit a server
+3. That server is the owner
+```
+
+### Adding a Server
+
+```
+Before:  A ──────── B ──────── C
+After:   A ──────── B ── E ─── C
+
+Only keys between B and C (now between B and E and between E and C)
+need to move. Approximately 1/N of total keys.
+
+With 1000 keys and 3 servers:
+  Simple hashing: ~800 keys move (80%)
+  Consistent hashing: ~333 keys move (33%)
+```
+
+### Removing a Server
+
+```
+Before:  A ── B ── C ── D
+After:   A ── B ─── D   (C removed)
+
+Only keys that were on C need to move to D.
+Approximately K/N keys move.
+```
+
+## Virtual Nodes (Vnodes)
+
+Without virtual nodes, 3 servers on the ring → uneven load (one server might handle 50%, another 15%).
+
+### The Problem
+
+```
+Without vnodes:
+  Server A placed at position 100
+  Server B placed at position 500
+  Server C placed at position 900
+
+  Ring coverage:
+  A: 0-100, 900-1000 → 20% of ring
+  B: 100-500 → 40% of ring
+  C: 500-900 → 40% of ring
+
+  A gets 20% of traffic
+  B gets 40% of traffic
+  C gets 40% of traffic
+  → Unbalanced!
+```
+
+### The Solution: Virtual Nodes
+
+```
+With vnodes (100 per server):
+  Server A: vnodes at positions 5, 15, 25, 35, 45, ...
+  Server B: vnodes at positions 10, 20, 30, 40, 50, ...
+  Server C: vnodes at positions 8, 18, 28, 38, 48, ...
+
+  Ring coverage:
+  A: ~33% of ring (scattered)
+  B: ~33% of ring (scattered)
+  C: ~33% of ring (scattered)
+  → Balanced!
+```
+
+### Vnode Count Impact
+
+| Vnodes Count | Load Std Dev | Notes |
+| --- | --- | --- |
+| 1 (no vnodes) | ~100% | Unusable in production |
+| 50 | ~20% | Still uneven |
+| 100 | ~10% | Good baseline |
+| 150 | ~7% | Diminishing returns |
+| 200 | ~5% | Production sweet spot |
+| 300+ | &lt;4% | Marginal improvement |
+
+<Callout type="info">
+**Production recommendation:** 100-200 virtual nodes per physical node.
+</Callout>
+
+## Implementation Example
+
+```python
+import hashlib
+import bisect
+
+class ConsistentHash:
+    def __init__(self, nodes=None, vnodes=100):
+        self.vnodes = vnodes
+        self.ring = {}
+        self.sorted_keys = []
+        
+        if nodes:
+            for node in nodes:
+                self.add_node(node)
+    
+    def _hash(self, key):
+        return int(hashlib.md5(key.encode()).hexdigest(), 16)
+    
+    def add_node(self, node):
+        for i in range(self.vnodes):
+            key = self._hash(f"{node}:{i}")
+            self.ring[key] = node
+            bisect.insort(self.sorted_keys, key)
+    
+    def remove_node(self, node):
+        for i in range(self.vnodes):
+            key = self._hash(f"{node}:{i}")
+            del self.ring[key]
+            self.sorted_keys.remove(key)
+    
+    def get_node(self, key):
+        if not self.ring:
+            return None
+        
+        h = self._hash(key)
+        idx = bisect.bisect_right(self.sorted_keys, h)
+        
+        if idx == len(self.sorted_keys):
+            idx = 0
+        
+        return self.ring[self.sorted_keys[idx]]
+
+# Usage
+ch = ConsistentHash(["server1", "server2", "server3"])
+print(ch.get_node("user:42"))  # Returns a server
+
+ch.add_node("server4")  # Only ~25% of keys move
+print(ch.get_node("user:42"))  # Likely same server
+```
+
+## Comparison Table
+
+| Approach | Keys Moved | Load Balance | Lookup Time | Best Use Case |
+| --- | --- | --- | --- | --- |
+| Modular hashing (key % n) | ~100% | Perfect | O(1) | Static cluster |
+| Ring hashing (no vnodes) | K/n average | Poor | O(log n) | Prototype only |
+| Ring + virtual nodes | K/n average | Good (tunable) | O(log n) | Cache clusters, DB sharding |
+| Jump hash (Google) | K/n optimal | Near-perfect | O(ln n) | Static shard count |
+| Rendezvous hashing | K/n optimal | Good | O(n) per lookup | Small clusters |
+| Maglev hashing (Google) | K/n near-optimal | Near-perfect | O(1) | L4 load balancers |
+
+## Real-World Usage
+
+- **Cassandra:** Uses vnodes (256 in 3.x, 16 in 4.0+)
+- **DynamoDB:** Amazon's Dynamo paper described consistent hashing as canonical partitioning
+- **Memcached:** Ketama algorithm (150 vnodes default)
+- **Akamai CDN:** Uses consistent hashing for content distribution
+- **Redis Cluster:** Uses 16,384 hash slots distributed across nodes
+
+<Callout type="info">
+**Interview Tip:** "Consistent hashing solves the rehashing problem. With N servers, adding one moves only 1/N keys. Without it, adding one moves ~N/N keys (all of them)."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Virtual nodes are essential for production. Without them, load distribution is unpredictable. 100-200 vnodes per node is the sweet spot."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Consistent hashing is used everywhere: distributed caches (Redis Cluster), databases (Cassandra), CDNs (Akamai), load balancers (Maglev)."
+</Callout>
+
+---
+
+## Further Reading
+
+- [Consistent Hashing and Random Trees (Original Paper)](https://dl.acm.org/doi/10.1145/258533.258555)
+- [Amazon Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+- [Redis Cluster Specification](https://redis.io/topics/cluster-spec)
+- [Maglev: A Fast and Reliable Software Network Load Balancer (Google)](https://research.google/pubs/pub44824/)

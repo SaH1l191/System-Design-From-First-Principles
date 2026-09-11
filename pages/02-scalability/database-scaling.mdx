@@ -1,0 +1,374 @@
+---
+title: Database Scaling
+---
+
+import { Callout } from 'nextra/components'
+
+# Database Scaling
+
+> Databases are the bottleneck in most systems. Reads can scale with replicas. Writes are harder — they require sharding. Connection management is often overlooked but can be the difference between 5ms and 50ms response times.
+
+## The Scaling Decision Tree
+
+```
+What is your symptom?
+│
+├── Read queries slow / high CPU?
+│   └── Add read replicas (low effort, high impact)
+│
+├── Too many connections / connection timeouts?
+│   └── Add connection pooling (PgBouncer, HikariCP)
+│
+├── Write queries slow?
+│   └── Optimize queries, add indexes (low-medium effort)
+│
+├── Data size exceeds single instance?
+│   └── Partition tables, then shard (high effort)
+│
+└── Write volume exceeds single instance?
+    └── Shard by tenant/customer ID (high effort)
+```
+
+## Read Replicas
+
+Read replicas are copies of the primary database that handle read queries, distributing read load across multiple machines.
+
+### How Read Replicas Work
+
+```
+                    ┌──────────────────┐
+                    │     PRIMARY      │ ← All writes
+                    │    (Writer)      │
+                    └────────┬─────────┘
+                             │ async replication
+                ┌────────────┼────────────┐
+                ▼            ▼            ▼
+          ┌──────────┐ ┌──────────┐ ┌──────────┐
+          │ Replica 1│ │ Replica 2│ │ Replica 3│ ← Reads
+          │ (Reader) │ │ (Reader) │ │ (Reader) │
+          └──────────┘ └──────────┘ └──────────┘
+```
+
+**Flow:**
+
+1. Application writes to Primary
+2. Primary replicates changes to Replicas (usually async)
+3. Application reads from Replicas
+4. Most read traffic (90%+ in typical workloads) goes to replicas
+
+### Why This Works
+
+Most applications have asymmetric read/write ratios:
+
+```
+Typical workload:
+  Reads:  90% (GET /users, GET /products, GET /feed)
+  Writes: 10% (POST /orders, PUT /profile, DELETE /items)
+
+If primary handles 10,000 QPS:
+  Without replicas: Primary handles all 10,000
+  With 3 replicas:  Primary handles ~1,000 writes
+                   3 replicas handle ~9,000 reads (3,000 each)
+```
+
+### Read Replicas in Practice
+
+**PostgreSQL:**
+
+```sql
+-- On primary
+CREATE ROLE replica_user WITH REPLICATION LOGIN PASSWORD 'password';
+
+-- On replica (postgresql.conf)
+primary_conninfo = 'host=primary port=5432 user=replica_user password=password'
+```
+
+**MySQL:**
+
+```sql
+-- On primary
+CREATE USER 'replica'@'%' IDENTIFIED BY 'password';
+GRANT REPLICATION SLAVE ON *.* TO 'replica'@'%';
+
+-- On replica
+CHANGE MASTER TO MASTER_HOST='primary', MASTER_USER='replica', MASTER_PASSWORD='password';
+START SLAVE;
+```
+
+### Read Replica Use Cases
+
+| Use Case | How It Helps |
+| --- | --- |
+| **E-commerce product catalog** | Millions of product views, few product updates |
+| **Social media feeds** | Millions of feed reads, relatively few posts |
+| **Analytics dashboards** | Heavy read queries, offload from primary |
+| **Geo-distributed reads** | Replicas in different regions for low-latency reads |
+
+### Replication Lag Problem
+
+With async replication, replicas may be seconds behind the primary:
+
+```
+Timeline:
+  T1: User updates profile (name = "Alice Johnson")
+  T2: Primary confirms write
+  T3: User immediately refreshes page
+  T4: Read goes to Replica (still has old name "Alice")
+  T5: Replica receives update (now has "Alice Johnson")
+```
+
+**Mitigations:**
+
+1. **Read-your-own-writes:** After a write, route reads to primary for 1-2 seconds
+2. **Sticky sessions:** Same user always reads from same replica
+3. **Causal consistency:** Attach version vectors to requests
+4. **Sync replication:** Higher latency but no lag (rarely used for reads)
+
+<Callout type="info">
+**Real example:** GitHub experienced a 43-second network partition that caused 24 hours of recovery and up to 954 unreconciled writes. Replication lag is not an academic problem.
+</Callout>
+
+## Write Scaling
+
+Single-writer architectures cap write throughput at one machine. Options:
+
+### Option 1: Vertical Scaling (Bigger Primary)
+
+Simplest approach. Works until you hit hardware limits.
+
+```
+Primary: 64 CPU, 256GB RAM → Handles 10,000 writes/sec
+Primary: 128 CPU, 512GB RAM → Handles 20,000 writes/sec
+Limit: ~30,000 writes/sec on largest instances
+```
+
+### Option 2: Sharding (Nuclear Option)
+
+Distribute writes across multiple primaries:
+
+```
+Shard 1 (user 1-3M): Primary A → 10,000 writes/sec
+Shard 2 (user 3-6M): Primary B → 10,000 writes/sec
+Shard 3 (user 6-9M): Primary C → 10,000 writes/sec
+Total: 30,000 writes/sec
+```
+
+### Option 3: CQRS (Command Query Responsibility Segregation)
+
+CQRS becomes much easier if you think about why reads and writes want different database shapes.
+
+**Without CQRS — One database handles everything:**
+
+```
+          PostgreSQL
+         /    |     \
+     Reads  Reads  Writes
+
+Tables: users, orders, order_items, products, payments
+```
+
+Writing an order requires inserting into orders, payments, and order_items — normalized tables are great for this because there's no duplicated data, transactions are easy, and consistency is strong.
+
+Reading order history requires joining orders, users, payments, order_items, and products — potentially expensive. The database is trying to be good at both reads and writes.
+
+**CQRS idea — Separate them:**
+
+```
+                Commands (writes)
+                       |
+                       v
+                 Primary DB
+                       |
+                 CDC/Event Stream
+                       |
+                       v
+                  Read Store
+                       ^
+                       |
+                Queries (reads)
+```
+
+**Step 1: Writes go to Primary DB**
+
+When a user places an order (POST /orders), the application writes to Primary PostgreSQL with normalized tables optimized for correctness.
+
+**Step 2: CDC captures changes**
+
+CDC (Change Data Capture) watches every database change and publishes it. When a new order is inserted, CDC produces events like `{"event": "OrderCreated", "orderId": 123}`. Tools often used: Debezium, Kafka Connect, native database replication logs.
+
+**Step 3: Build the Read Store**
+
+A separate process consumes events and updates a special database. Instead of normalized tables, you create a pre-joined view:
+
+```json
+{
+  "orderId": 123,
+  "customer": "Alice",
+  "products": ["iPhone", "AirPods"],
+  "paymentStatus": "Paid",
+  "shippingStatus": "Shipped"
+}
+```
+
+Now a dashboard query becomes: `SELECT * FROM order_summary WHERE order_id = 123` — no joins, very fast.
+
+**Why this scales better:**
+
+```
+Suppose: 1,000 writes/sec, 100,000 reads/sec
+
+Without CQRS:
+  PostgreSQL handles 100k reads + 1k writes → Read traffic overwhelms the database
+
+With CQRS:
+  Writes → Primary DB → CDC Stream
+  Reads → Read1, Read2, Read3 (scale independently)
+```
+
+<Callout type="warning">
+**Eventual consistency tradeoff:** For a brief moment after a write, the primary DB has the new value while the read store still has the old value. This is usually acceptable for reads, but you need to think about read-your-own-writes scenarios.
+</Callout>
+
+**The read store concept:**
+
+The read store is usually a separate database whose schema is designed for query speed, not for data integrity or efficient writes. It's a denormalized, query-optimized copy of the truth, maintained from the primary database, and used only for reads.
+
+The read store doesn't even have to be the same type of database:
+
+- PostgreSQL (writes) → CDC → Elasticsearch (for search)
+- PostgreSQL (writes) → CDC → Redis (for ultra-fast reads)
+- PostgreSQL (writes) → CDC → ClickHouse (for analytics)
+
+**When CQRS is worth it:** Usually when reads are much heavier than writes, complex joins hurt performance, different teams own reads and writes, or you need specialized read databases (e-commerce, analytics dashboards, social networks, large SaaS products). For a startup MVP or typical CRUD app, CQRS is often overkill — a single PostgreSQL plus read replicas is usually simpler and sufficient.
+
+## Connection Pooling
+
+This is one of the most overlooked performance optimizations. Database connections are expensive.
+
+### The Connection Problem
+
+```
+Without pooling:
+  Request → Open connection (50-100ms) → Query → Close → ~100ms wasted
+
+With pooling:
+  App starts → Pre-open 10-100 connections in pool
+  Request → Borrow connection (0ms) → Query → Return to pool → Near 0ms overhead
+```
+
+### Why Connections Are Expensive
+
+Opening a database connection involves:
+
+1. TCP handshake (1 RTT)
+2. TLS handshake (1-2 RTTs, if encrypted)
+3. Authentication (1-2 RTTs)
+4. Memory allocation (connection state, buffers)
+5. Thread/process creation
+
+Total: **50-100ms per connection** in typical setups. With 1,000 requests/sec, that's 50-100 seconds of connection time wasted per second.
+
+### Connection Pool Architecture
+
+```
+Application
+    │
+    ├── Request 1 ──→ Pool ──→ Connection 1 ──→ DB
+    ├── Request 2 ──→ Pool ──→ Connection 2 ──→ DB
+    ├── Request 3 ──→ Pool ──→ Connection 3 ──→ DB
+    └── Request 4 ──→ Pool (waiting) ──→ Available connection?
+                                         (if none, wait or fail)
+```
+
+### Key Pool Settings
+
+| Setting | Recommended | Notes |
+| --- | --- | --- |
+| **min_connections** | 5-10 | Always-open minimum, avoids cold start |
+| **max_connections** | 50-100 | Don't exceed DB's max_connections |
+| **connection_timeout** | 5-30s | How long to wait for a connection from pool |
+| **idle_timeout** | 300-600s | Close idle connections to free resources |
+| **max_lifetime** | 1800-3600s | Recycle connections to prevent stale state |
+
+### Rule of Thumb
+
+```
+Pool size ≈ (CPU cores × 2) + effective spindle count
+
+Example:
+  App server: 8 cores
+  Database: SSD (1 effective spindle)
+  Pool size ≈ (8 × 2) + 1 = 17 → round to 20
+```
+
+### Popular Connection Poolers
+
+| Pooler | Database | Language | Notes |
+| --- | --- | --- | --- |
+| **PgBouncer** | PostgreSQL | Any | Most popular PostgreSQL pooler |
+| **HikariCP** | Any JDBC DB | Java | Default in Spring Boot |
+| **SQLAlchemy pool** | Any | Python | Built into SQLAlchemy |
+| **pgpool-II** | PostgreSQL | Any | Connection pooling + load balancing |
+| **ProxySQL** | MySQL | Any | Query routing + connection pooling |
+
+### PgBouncer Configuration
+
+```ini
+[databases]
+mydb = host=localhost port=5432 dbname=mydb
+
+[pgbouncer]
+listen_port = 6432
+listen_addr = *
+auth_type = md5
+auth_file = /etc/pgbouncer/userlist.txt
+pool_mode = transaction  # session, transaction, or statement
+max_client_conn = 1000
+default_pool_size = 20
+min_pool_size = 5
+reserve_pool_size = 5
+```
+
+### Pool Modes (PgBouncer)
+
+| Mode | How It Works | Pros | Cons |
+| --- | --- | --- | --- |
+| **Session** | Connection assigned for entire client session | Simplest | Least efficient |
+| **Transaction** | Connection assigned per transaction | Good balance | Can't use PREPARE, SET commands |
+| **Statement** | Connection assigned per statement | Most efficient | Breaks multi-statement transactions |
+
+<Callout type="info">
+**Recommendation:** Use `transaction` mode for most workloads.
+</Callout>
+
+## Scaling Strategy Summary
+
+| Symptom | Solution | Complexity | Impact |
+| --- | --- | --- | --- |
+| Read queries slow / high CPU | Add read replicas | Low | High |
+| Too many connections | Add PgBouncer | Low | High |
+| Write queries slow | Optimize queries, add indexes | Low-Medium | Medium |
+| Data size exceeds single instance | Partition tables, then shard | High | High |
+| Write volume exceeds single instance | Shard by tenant/customer ID | High | High |
+
+<Callout type="info">
+**Interview Tip:** "Database scaling follows a progression: optimize queries → add indexes → add read replicas → connection pooling → vertical scaling → sharding. Don't jump to sharding until you've exhausted simpler options."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The most common database performance issue isn't hardware — it's connection management. Adding PgBouncer can reduce latency from 50ms to 5ms without changing a single line of code."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Read replicas scale reads cheaply. Sharding scales writes expensively. Know the difference and when to use each."
+</Callout>
+
+---
+
+## Further Reading
+
+- [PostgreSQL: Streaming Replication](https://www.postgresql.org/docs/current/warm-standby.html)
+- [PgBouncer Documentation](https://www.pgbouncer.org/config.html)
+- [MySQL Replication](https://dev.mysql.com/doc/refman/8.0/en/replication.html)
+- [DDIA Chapter 5: Replication](https://dataintensive.net/)
+- [AWS RDS Read Replicas](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadReplica.html)

@@ -1,0 +1,132 @@
+---
+title: Interview Cheat Sheet — Stage 2
+---
+
+import { Callout } from 'nextra/components'
+
+# Interview Cheat Sheet: Stage 2
+
+## Scaling
+
+- **Vertical:** Simpler, cheaper at small scale, limited by hardware ceiling
+- **Horizontal:** More complex, unbounded scaling, requires stateless design
+- **Auto-scaling:** Bridge between vertical and horizontal
+- Start vertical, go horizontal when needed
+
+## Database Scaling
+
+- Read replicas scale reads (90%+ of typical workloads)
+- Connection pooling reduces latency (50ms → 5ms)
+- Sharding scales writes (most expensive option)
+- PgBouncer for PostgreSQL, HikariCP for Java
+
+## Sharding
+
+- Shard key is the most consequential decision
+- Hash-based: uniform distribution, poor range queries
+- Range-based: good range queries, potential hot spots
+- Consistent hashing: only K/N keys move on node change
+- Virtual nodes: 100-200 per physical node
+- Always include shard key in queries
+
+## Replication
+
+- Single-leader: default for most OLTP
+- Multi-leader: conflicts are harder than they look
+- Leaderless: quorum-based (W + R > N)
+- Sync replication: no data loss, higher latency
+- Async replication: lower latency, data loss window
+
+## Partitioning
+
+- Horizontal: split rows across tables/databases
+- Vertical: split columns across tables/databases
+- PostgreSQL native partitioning (RANGE, LIST, HASH)
+- Combine horizontal + vertical for large systems
+
+## Consistent Hashing
+
+- Solves rehashing problem (only K/N keys move)
+- Virtual nodes: essential for production
+- Used by: Redis Cluster, Cassandra, CDNs
+- 100-200 vnodes per physical node
+
+## Denormalization
+
+- Trade: faster reads vs slower writes + more storage
+- Start with 3NF, denormalize when proven necessary
+- Modern pattern: normalized core + CDC-fed projections
+- Materialized views for pre-computed aggregations
+
+## Rate Limiting
+
+- Token bucket: default for APIs (allows bursts)
+- Sliding window counter: strict limits (~1% error)
+- Distributed: Redis + Lua scripts
+- Two-tier: local + global for performance
+- Fail open by default (except security)
+
+---
+
+## Decision Framework
+
+### Scaling Strategy
+
+```
+Small scale (< 10K users) → Vertical scaling
+Medium scale (10K-1M users) → Vertical + read replicas
+Large scale (1M+ users) → Horizontal + sharding
+Spiky traffic → Auto-scaling
+```
+
+### Database Scaling
+
+```
+Read-heavy → Read replicas + connection pooling
+Write-heavy → Vertical scaling first, then sharding
+Connection issues → PgBouncer / HikariCP
+Data too large → Partitioning, then sharding
+```
+
+### Sharding Strategy
+
+```
+Random access by ID → Hash-based sharding
+Range queries → Range-based sharding
+Elastic scaling → Consistent hashing
+Multi-tenant → Directory-based sharding
+Multi-region → Geo-based sharding
+```
+
+### Replication Strategy
+
+```
+Most OLTP → Single-leader + async replication
+Geo-distributed writes → Multi-leader (use carefully)
+High availability → Leaderless (Dynamo-style)
+Strong consistency → Synchronous replication
+```
+
+### Denormalization Strategy
+
+```
+Read:write < 10:1 → Stay normalized
+Read:write > 10:1 → Denormalize hot path
+Read:write > 50:1 → Strongly consider denormalization
+Modern default → Normalized core + CDC-fed projections
+```
+
+### Rate Limiting Strategy
+
+```
+Default → Token bucket
+Strict endpoint caps → Sliding window counter
+Distributed → Redis + two-tier caching
+Failure behavior → Fail open (except security)
+```
+
+---
+
+<Callout type="info">
+**Remember:** Stage 2 covers scalability and performance — the topics that separate junior from senior engineers. Master these before moving to Stage 3: Distributed Systems.
+</Callout>

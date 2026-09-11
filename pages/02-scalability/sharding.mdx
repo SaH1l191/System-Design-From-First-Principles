@@ -1,0 +1,416 @@
+---
+title: Sharding (Data Partitioning)
+---
+
+import { Callout } from 'nextra/components'
+
+# Sharding (Data Partitioning)
+
+> Sharding is horizontal partitioning of data across multiple database servers. Each server (shard) holds a subset of the total data. Together, they hold everything. Sharding is the most powerful — and most dangerous — database scaling technique. The shard key is the single most consequential architectural decision you'll make.
+
+## What is Sharding?
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Shard Router                    │
+│   (maps query → correct shard)                  │
+│   Application code or middleware (Vitess, Citus) │
+└──────────┬──────────┬──────────┬────────────────┘
+           ▼          ▼          ▼
+     ┌──────────┐ ┌──────────┐ ┌──────────┐
+     │ Shard 1  │ │ Shard 2  │ │ Shard 3  │
+     │ users    │ │ users    │ │ users    │
+     │ 1-3M     │ │ 3-6M     │ │ 6-9M     │
+     └──────────┘ └──────────┘ └──────────┘
+```
+
+**Without sharding:**
+
+```
+10 million users in ONE database
+  → Query: SELECT * FROM users WHERE id = 42
+  → Database scans millions of rows
+  → Writes limited to one machine's capacity
+```
+
+**With sharding:**
+
+```
+10 million users split across 3 shards
+  → Shard 1: users 1-3M
+  → Shard 2: users 3-6M
+  → Shard 3: users 6-9M
+  → Query: SELECT * FROM users WHERE id = 42
+  → Shard Router knows: user 42 → Shard 1
+  → Only Shard 1 is queried (3.3x faster)
+```
+
+## Sharding Strategies
+
+### 1. Hash-Based Sharding
+
+**How it works:**
+
+```
+shard = hash(shard_key) % number_of_shards
+
+Example:
+  hash("user:42") = 7
+  7 % 3 = 1 → Shard 1
+
+  hash("user:99") = 15
+  15 % 3 = 0 → Shard 0
+```
+
+**Distribution:**
+
+```
+Shard 0: hash % 3 == 0 → ~33% of data
+Shard 1: hash % 3 == 1 → ~33% of data
+Shard 2: hash % 3 == 2 → ~33% of data
+```
+
+**Pros:**
+
+- Even data distribution (assuming good hash function)
+- Simple to implement
+- No data migration needed for lookups
+
+**Cons:**
+
+- Range queries are expensive (scatter-gather across all shards)
+- Resharding is painful (changing N rehashes ~80% of keys)
+- No data locality
+
+**When to use:** High-write workloads with random access by ID (most common use case).
+
+### 2. Range-Based Sharding
+
+**How it works:**
+
+```
+Shard 0: user_id 1-1,000,000
+Shard 1: user_id 1,000,001-2,000,000
+Shard 2: user_id 2,000,001-3,000,000
+```
+
+**Pros:**
+
+- Range queries are efficient (single shard)
+- Data is ordered (easy to iterate)
+- Resharding is simpler (split/merge ranges)
+
+**Cons:**
+
+- Uneven distribution (latest range gets all writes)
+- Hot spots (e.g., new users all on last shard)
+- Requires careful range planning
+
+**When to use:** Time-series data, ordered data, append-only workloads.
+
+### 3. Directory-Based Sharding
+
+**How it works:**
+
+```
+Lookup Table:
+┌───────────┬─────────┐
+│ Entity ID │ Shard   │
+├───────────┼─────────┤
+│ user:1    │ Shard 0 │
+│ user:2    │ Shard 2 │
+│ user:3    │ Shard 1 │
+│ user:4    │ Shard 0 │
+└───────────┴─────────┘
+```
+
+**Flow:**
+
+1. Query arrives for user:3
+2. Directory lookup: user:3 → Shard 1
+3. Route to Shard 1
+
+**Pros:**
+
+- Maximum flexibility (can move individual entities)
+- Supports per-tenant isolation
+- Resharding is easy (update mapping)
+
+**Cons:**
+
+- Directory is a single point of failure
+- Adds latency on every access
+- Must be highly available
+
+**When to use:** Multi-tenant systems with whale tenants, per-tenant isolation requirements.
+
+### 4. Geo-Based Sharding
+
+**How it works:**
+
+```
+US users → US-East shard (Virginia)
+EU users → EU-West shard (Frankfurt)
+Asia users → Asia shard (Singapore)
+```
+
+**Pros:**
+
+- Low-latency reads (data near users)
+- Regulatory compliance (data residency)
+- Natural fault isolation
+
+**Cons:**
+
+- Cross-region queries are expensive
+- Uneven distribution (depends on user geography)
+- Complex to manage
+
+**When to use:** Multi-region systems, data residency requirements, latency-sensitive applications.
+
+### Strategy Comparison
+
+| Strategy | Distribution | Range Queries | Resharding Cost | Best For |
+| --- | --- | --- | --- | --- |
+| **Hash-based** | Uniform | Poor (scatter-gather) | High (rehash all) | High-write, random access by ID |
+| **Range-based** | Depends on data | Excellent | Medium (split/merge) | Time-series, ordered data |
+| **Consistent hashing** | Uniform | Poor | Low (only K/N keys move) | Elastic scaling |
+| **Directory-based** | Flexible | Depends | Low (update mapping) | Per-tenant flexibility |
+| **Geo-based** | Regional | Regional | Low | Multi-region latency |
+
+## Shard Key Selection (Critical Decision)
+
+The shard key determines which shard a row lives on. Every query needs to know which shard to hit. The wrong shard key is nearly impossible to fix without a full migration.
+
+### Rules for Choosing a Shard Key
+
+**1. High Cardinality**
+
+The shard key should have thousands+ distinct values to spread data evenly.
+
+```
+❌ Bad: gender (male, female, other) → 3 shards, uneven distribution
+❌ Bad: country (195 countries) → 195 shards, too many
+✅ Good: user_id (millions of values) → even distribution
+✅ Good: order_id (millions of values) → even distribution
+```
+
+**2. Predictable Access Patterns**
+
+Align with how your application queries data.
+
+```
+If app queries: SELECT * FROM orders WHERE user_id = 42
+  → Shard key: user_id
+
+If app queries: SELECT * FROM logs WHERE timestamp > '2026-01-01'
+  → Shard key: timestamp (range-based)
+```
+
+**3. Balanced Write Behavior**
+
+One shard shouldn't become much hotter than others.
+
+```
+❌ Bad: created_at as shard key → all new writes go to latest shard
+✅ Good: user_id → writes spread across all shards
+```
+
+### Decision Flowchart
+
+```
+What is your primary access pattern?
+│
+├── Single-entity lookup (user_id, order_id)?
+│   ├── Need elastic scaling? → Consistent hashing
+│   └── No? → Hash-based sharding
+│
+├── Range scans (time-series, date ranges)?
+│   ├── Append-only data? → Range-based with time buckets
+│   └── No? → Range-based with dynamic splitting
+│
+├── Multi-tenant with whale tenants? → Directory-based
+│
+└── Default → Hash-based on most-queried entity ID
+```
+
+<Callout type="warning">
+**The biggest mistake people make** is jumping to "Let's shard by user_id" without asking "How do we actually query the data?"
+</Callout>
+
+## The Hot Spot Problem
+
+**Cause:** One shard receives disproportionate traffic.
+
+| Problem | Example | Solution |
+| --- | --- | --- |
+| **Sequential keys** | Timestamp-based shard key → latest shard gets all writes | Hash the key |
+| **Celebrity/power law** | One user with 10M followers | Sub-shard partitioning, dedicated shard |
+| **Range clustering** | New users all on last shard | Use hash-based or consistent hashing |
+| **Geo concentration** | All users in one region | Geo-based sharding or multi-region replicas |
+
+### Example: The Celebrity Problem
+
+```
+Instagram shard by user_id:
+  Shard 0: 1M users, 10M posts
+  Shard 1: 1M users, 10M posts
+  Shard 2: 1M users, 10M posts
+  Shard 3: 1M users, 500M posts (Kardashian's shard!) ← HOT SPOT
+```
+
+**Solution: Sub-shard partitioning**
+
+```
+Celebrity user's posts → Split across multiple sub-shards
+  Post 1 → Shard 3, Sub-shard 0
+  Post 2 → Shard 3, Sub-shard 1
+  Post 3 → Shard 3, Sub-shard 0
+```
+
+## Cross-Shard Queries
+
+Queries without the shard key in WHERE clause hit all shards (scatter-gather).
+
+### The Problem
+
+```sql
+-- This query is efficient:
+SELECT * FROM orders WHERE user_id = 42;  -- Hits 1 shard
+
+-- This query is expensive:
+SELECT * FROM orders WHERE status = 'pending';  -- Hits ALL shards
+-- Shard key is user_id
+SELECT AVG(total) FROM orders;  -- Hits ALL shards, aggregates results
+```
+
+### Scatter-Gather Flow
+
+```
+Query: SELECT * FROM orders WHERE status = 'pending'
+
+Step 1: Router sends query to ALL shards
+  Shard 0: SELECT * FROM orders WHERE status = 'pending' → 100 rows
+  Shard 1: SELECT * FROM orders WHERE status = 'pending' → 150 rows
+  Shard 2: SELECT * FROM orders WHERE status = 'pending' → 120 rows
+
+Step 2: Router aggregates results
+  Total: 370 rows
+
+Step 3: Return to client
+```
+
+### Mitigations
+
+1. **Always include shard key in queries:** Design your data model so common queries include the shard key
+2. **Denormalize data:** Avoid cross-shard JOINs by duplicating data
+3. **Global secondary index:** For alternative access patterns, maintain a global index that maps to shards
+4. **Accept eventual consistency:** Cross-shard aggregations may be slightly stale
+
+### Global Secondary Index
+
+When you shard by `user_id`, looking up by user ID is easy — the router knows exactly which shard to hit. But what about alternative access patterns?
+
+```
+Shard A: users 1-1M
+Shard B: users 1M-2M
+Shard C: users 2M-3M
+
+Find user by email:
+SELECT * FROM users WHERE email = 'john@gmail.com'
+
+Problem: email is NOT the shard key → You don't know which shard owns John.
+```
+
+**Solution: Global Secondary Index**
+
+```
+Global Email Index
+john@gmail.com → Shard B, User 12345
+alice@gmail.com → Shard A, User 892
+
+Flow:
+Find john@gmail.com → Global Index → Shard B → Actual User Record
+```
+
+Think of it as a phone book that tells you which shard owns a record. Large systems maintain global indexes for email, username, phone number, SKU, and customer number.
+
+## Resharding
+
+When you need more shards, data must be redistributed.
+
+### Virtual Shards (Most Common)
+
+```
+Step 1: Create 256 logical shards (virtual)
+Step 2: Map logical shards to physical shards
+
+Initial (3 physical shards):
+  Logical 0-85   → Physical Shard 0
+  Logical 86-170  → Physical Shard 1
+  Logical 171-255 → Physical Shard 2
+
+After adding 4th physical shard:
+  Logical 0-63    → Physical Shard 0
+  Logical 64-127  → Physical Shard 1
+  Logical 128-191 → Physical Shard 2
+  Logical 192-255 → Physical Shard 3 (NEW)
+
+Only ~25% of data moves (logical shards 192-255)
+```
+
+### Double-Write Migration
+
+```
+Phase 1: Dual Write
+  Write to BOTH old shard and new shard
+  Read from old shard
+
+Phase 2: Backfill
+  Copy historical data from old to new shard
+  Verify consistency
+
+Phase 3: Switch Reads
+  Read from new shard
+  Write to both
+
+Phase 4: Stop Writes to Old
+  Write only to new shard
+  Decommission old shard
+```
+
+## Real-World Examples
+
+### Cassandra
+
+Uses virtual nodes (vnodes) on consistent hash ring. 256 vnodes per physical node in Cassandra 3.x, 16 in 4.0+.
+
+### Vitess (YouTube/CNCF)
+
+Sharding middleware for MySQL. Handles resharding automatically. Used by YouTube, Slack, Square.
+
+### Citus
+
+Distributed PostgreSQL extension for sharding. Turns a single PostgreSQL into a distributed database.
+
+<Callout type="info">
+**Interview Tip:** "Hash-based with consistent hashing is the safe default for most scenarios. Mention range-based if the interviewer asks about range queries, and directory-based if you need per-tenant flexibility."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The shard key is the single most consequential architectural decision. The wrong one is nearly impossible to fix without a full migration. Always discuss trade-offs before committing."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Start with 'Do we really need sharding?' Usually, read replicas and caching solve the problem with 10% of the complexity."
+</Callout>
+
+---
+
+## Further Reading
+
+- [Vitess Documentation](https://vitess.io/docs/)
+- [Citus Distributed PostgreSQL](https://www.citusdata.com/documentation/)
+- [Cassandra Documentation](https://cassandra.apache.org/doc/latest/)
+- [DDIA Chapter 6: Partitioning](https://dataintensive.net/)
+- [Stripe: How We Scale MySQL](https://stripe.com/blog/ scalable-mysql)

@@ -1,0 +1,205 @@
+---
+title: Partitioning
+---
+
+import { Callout } from 'nextra/components'
+
+# 2.5 Partitioning
+
+> Partitioning divides a large dataset into smaller, more manageable pieces across multiple storage nodes. Unlike sharding (which distributes across servers), partitioning often happens within a single database. Understanding the difference is key.
+
+## Horizontal vs Vertical Partitioning
+
+```
+HORIZONTAL PARTITIONING (Sharding)
+┌─────────────────┐     ┌─────────────────┐
+│ users table      │     │ Shard 1         │
+│ ┌───┬─────┬───┐ │     │ ┌───┬─────┐     │
+│ │ID │Name │...│ │ ──→ │ │1  │Alice│ ... │
+│ ├───┼─────┼───┤ │     │ │2  │Bob  │     │
+│ │ 1 │Alice│   │ │     │ └───┴─────┘     │
+│ │ 2 │Bob  │   │ │     │ Shard 2         │
+│ │ 3 │Carol│   │ │     │ ┌───┬─────┐     │
+│ │ 4 │Dave │   │ │ ──→ │ │3  │Carol│     │
+│ └───┴─────┴───┘ │     │ │4  │Dave │     │
+└─────────────────┘     │ └───┴─────┘     │
+                        └─────────────────┘
+
+VERTICAL PARTITIONING
+┌─────────────────┐     ┌──────────────┐
+│ users table      │     │ Part A       │
+│ ┌───┬─────┬───┐ │     │ ┌───┬─────┐  │
+│ │ID │Name │Bio│ │ ──→ │ │1  │Alice│  │
+│ ├───┼─────┼───┤ │     │ │2  │Bob  │  │
+│ │ 1 │Alice│...│ │     │ └───┴─────┘  │
+│ │ 2 │Bob  │...│ │     └──────────────┘
+│ └───┴─────┴───┘ │     ┌──────────────┐
+└─────────────────┘     │ Part B       │
+                        │ ┌───┬─────┐  │
+                        │ │1  │...  │  │ ← Bio column
+                        │ │2  │...  │  │
+                        │ └───┴─────┘  │
+                        └──────────────┘
+```
+
+### Horizontal Partitioning (Sharding)
+
+Splits **rows** across multiple tables/databases. Each partition has the same schema but different data.
+
+```sql
+-- Before horizontal partitioning
+SELECT * FROM orders WHERE customer_id = 42;
+
+-- After: orders split into 4 partitions
+-- Partition 0: customer_id 1-250K
+-- Partition 1: customer_id 250K-500K
+-- Partition 2: customer_id 500K-750K
+-- Partition 3: customer_id 750K-1M
+
+-- Router knows: customer_id 42 → Partition 0
+SELECT * FROM orders_0 WHERE customer_id = 42;
+```
+
+**Use case:** Tables with billions of rows that don't fit on one server.
+
+### Vertical Partitioning
+
+Splits **columns** across multiple tables/databases. Different columns go to different storage.
+
+#### What vertical partitioning actually does
+
+Original table:
+
+```
+users(id, name, email, bio, avatar, preferences)
+```
+
+Most queries:
+
+```sql
+SELECT id, name, email FROM users WHERE id = 42;
+```
+
+But the database still stores everything together on disk. So even if you only need name, the DB may still read large rows, pull extra columns from disk/page, and load more data into memory/cache.
+
+#### After vertical partitioning
+
+You split into:
+
+```
+users_core(id, name, email)
+users_profile(id, bio, avatar, preferences)
+```
+
+Now your query becomes:
+
+```sql
+SELECT id, name, email FROM users_core WHERE id = 42;
+```
+
+#### Why this is faster (real reason)
+
+**Key idea: You are reading fewer bytes from disk + memory.**
+
+Before — one row is big:
+
+```
+[ id | name | email | bio | avatar | preferences ]
+
+Even if you need 3 fields, you still touch the whole row/page.
+```
+
+After — core table is small:
+
+```
+[ id | name | email ]   ← small, cache-friendly
+
+Profile table:
+[ id | bio | avatar | preferences ]  ← only loaded when needed
+```
+
+#### What actually improves
+
+**(A) Less I/O (biggest win):** Disk reads are expensive. Smaller rows = fewer bytes read.
+
+**(B) Better cache efficiency:** Hot data fits in memory — `users_core` fits in RAM, `users_profile` stays on disk. So most queries avoid disk entirely.
+
+**(C) Faster index + scan operations:** Smaller table = fewer pages to scan.
+
+#### What DOESN'T improve
+
+This is important:
+
+- **It does NOT make lookup O(1) vs O(log n)** — that depends on index and data structure (B-tree, hash index), not partitioning.
+- **It does NOT reduce number of rows searched** — it only reduces row size and table size per query.
+
+#### Clarification: The "mapping" misconception
+
+Mapping between data and partitions exists, but it is **NOT** the performance gain source. Mapping only helps locate data. The real gain is: **less data touched per query**.
+
+### Comparison
+
+| Aspect | Horizontal | Vertical |
+| --- | --- | --- |
+| **Splits by** | Rows | Columns |
+| **Schema per partition** | Same | Different (subset of columns) |
+| **Use case** | Large tables with many rows | Tables with many columns, different access patterns |
+| **Query routing** | Need shard key in WHERE | Natural partition specification |
+| **Example** | Orders table split by customer_id | Users table split into profile + settings |
+
+### Directory-Based Partitioning
+
+A lookup table maps each key to a partition:
+
+```
+Partition Directory:
+┌──────────────┬─────────────┐
+│ Key Range    │ Partition   │
+├──────────────┼─────────────┤
+│ 1-100,000    │ Partition 0 │
+│ 100,001-200K │ Partition 1 │
+│ 200,001-300K │ Partition 2 │
+└──────────────┴─────────────┘
+```
+
+**Pros:** Maximum flexibility, easy to move data between partitions. **Cons:** Directory is a SPOF, adds latency, must be highly available.
+
+### When to Combine Both
+
+Large systems often use both:
+
+1. **Vertically partition by domain:** Separate databases for users, orders, analytics
+2. **Horizontally shard tables that grow largest:** Shard orders by customer_id within the orders domain
+
+**Example:** E-commerce platform vertically separates orders from product catalog, then horizontally shards orders by customer ID.
+
+## PostgreSQL Partitioning Example
+
+```sql
+-- Create partitioned table
+CREATE TABLE orders (
+    id SERIAL,
+    customer_id INT,
+    total DECIMAL(10,2),
+    created_at TIMESTAMP
+) PARTITION BY RANGE (created_at);
+
+-- Create partitions
+CREATE TABLE orders_2026_q1 PARTITION OF orders
+    FOR VALUES FROM ('2026-01-01') TO ('2026-04-01');
+
+CREATE TABLE orders_2026_q2 PARTITION OF orders
+    FOR VALUES FROM ('2026-04-01') TO ('2026-07-01');
+
+-- Query automatically routes to correct partition
+SELECT * FROM orders WHERE created_at = '2026-03-15';
+-- Only scans orders_2026_q1 (not all orders)
+```
+
+## Interview Tips
+
+> "Partitioning is about manageability. Sharding is about scale. Most databases support partitioning natively (PostgreSQL, MySQL). Sharding requires middleware or application-level logic."
+
+> "Vertical partitioning is underrated. Moving large, rarely-accessed columns (bio, avatar, JSON blobs) to separate tables can dramatically improve query performance for hot data."
+
+---

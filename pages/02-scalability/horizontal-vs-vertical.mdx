@@ -1,0 +1,377 @@
+---
+title: Horizontal vs Vertical Scaling
+---
+
+import { Callout } from 'nextra/components'
+
+# Horizontal vs Vertical Scaling
+
+> Scaling is the ability of a system to handle increased load without degrading performance. Load can mean more users, more requests/second, more data, or stricter latency requirements. This is the fundamental decision in system design — and the one most people get wrong by defaulting to horizontal when vertical would be simpler.
+
+## The Two Directions of Scaling
+
+```
+VERTICAL SCALING (Scale Up)              HORIZONTAL SCALING (Scale Out)
+┌──────────────────────┐                ┌──────┐ ┌──────┐ ┌──────┐
+│     BIGGER SERVER    │                │ Srv1 │ │ Srv2 │ │ Srv3 │
+│                      │                │ 2CPU │ │ 2CPU │ │ 2CPU │
+│  16 CPU cores        │                │ 8GB  │ │ 8GB  │ │ 8GB  │
+│  128GB RAM           │                └──────┘ └──────┘ └──────┘
+│  2TB SSD             │                      ↑
+│  10Gbps network      │               Add more machines
+└──────────────────────┘               behind a load balancer
+       ↑
+  Add resources
+  to one machine
+```
+
+**Vertical Scaling (Scale Up):** Make one machine stronger — more CPU, RAM, faster disks, better network.
+
+**Horizontal Scaling (Scale Out):** Add more machines to distribute load across them.
+
+## The Restaurant Analogy
+
+Think of a restaurant:
+
+- **Vertical scaling:** Hire a faster chef who can cook 10x more dishes per hour
+- **Horizontal scaling:** Hire 10 chefs, each cooking their own dishes
+
+Eventually, you can't find a chef fast enough (vertical limit). But you can always hire more chefs (horizontal). The catch: managing 10 chefs requires coordination (load balancing, shared state, communication).
+
+<Callout type="info">
+**Key distinction:** Vertical scaling improves the performance of **one task**. Horizontal scaling improves the **number of tasks** you can handle simultaneously.
+</Callout>
+
+## Deep Comparison
+
+| Aspect | Vertical Scaling | Horizontal Scaling |
+| --- | --- | --- |
+| **Core Idea** | Make one machine stronger | Add more machines |
+| **Architectural Change** | Minimal (just swap hardware) | Significant (load balancer, stateless design) |
+| **Fault Tolerance** | Low (single point of failure) | High (redundancy across machines) |
+| **Scaling Limit** | Hard hardware ceiling (~896 vCPUs on largest AWS instance) | Practically unbounded |
+| **Complexity** | Low | High (distributed systems problems) |
+| **Cost Curve** | Exponential (2x CPU ≠ 2x price, often 5-10x) | Linear (2x servers ≈ 2x price) |
+| **Downtime** | Server restart required | Zero downtime (rolling updates) |
+| **State** | State lives on the server | State must be externalized (Redis, DB) |
+| **Deployment** | Risky (one giant server) | Safe (one of many replicas) |
+
+## Limits of Vertical Scaling
+
+### 1. Physical Hardware Limits
+
+You can't buy a 10,000-core box. The largest AWS instance (as of 2026):
+
+| Instance | vCPUs | RAM | Cost/month |
+| --- | --- | --- | --- |
+| m5.24xlarge | 96 | 384 GB | ~$4,600 |
+| x1e.32xlarge | 128 | 3,904 GB | ~$26,000 |
+| u-24tb1.metal | 448 | 24,576 GB | ~$200,000+ |
+
+Beyond this? You're stuck. No amount of money can buy a bigger machine.
+
+### 2. Blast Radius
+
+One big machine dying = 100% of traffic affected.
+
+```
+Single server dies:
+10,000 users → 💥 ALL users affected
+
+100 small servers, one dies:
+10,000 users → 99 servers handle 99.5% of traffic
+              → 0.5% of users see brief interruption
+              → Auto-scaling replaces the dead server
+```
+
+### 3. Deployment Risk
+
+Restarting a vertical giant is scary. If you have a 128-core, 2TB RAM server:
+
+- Graceful shutdown takes minutes
+- All connections drop
+- All users affected simultaneously
+
+With 100 small replicas:
+
+- Rolling updates: one at a time
+- Zero downtime
+- Rollback is instant (just stop updating)
+
+### 4. Cost Curve
+
+High-end machines have exponential pricing:
+
+```
+2 CPU, 8GB   → $100/month
+4 CPU, 16GB  → $200/month (2x specs, 2x price)
+8 CPU, 32GB  → $500/month (2x specs, 2.5x price)
+16 CPU, 64GB → $1,500/month (2x specs, 3x price)
+32 CPU, 128GB → $5,000/month (2x specs, 3.3x price)
+```
+
+vs. Horizontal:
+
+```
+1 server: $100/month
+10 servers: $1,000/month (10x capacity, 10x price — linear!)
+```
+
+## When to Use Which
+
+| Scenario | Recommendation | Reason |
+| --- | --- | --- |
+| **Database (PostgreSQL, MySQL)** | Vertical + read replicas | Databases are stateful; scale vertically first, add replicas for reads |
+| **Stateless APIs** | Horizontal from day one | Easy to add instances behind load balancer |
+| **Single-threaded workloads** | Vertical | Faster CPU helps more than more CPUs |
+| **Team &lt; 5 engineers** | Vertical | Horizontal adds operational complexity |
+| **Spiky traffic** | Horizontal + auto-scaling | Can't predict when to scale up/down vertically |
+| **High availability required** | Horizontal (min 2 servers) | No single point of failure |
+| **Video encoding / ML training** | Vertical (GPU instances) | Single-threaded performance matters |
+| **Startup MVP** | Vertical | Simpler, cheaper, faster to ship |
+
+## Workload-Specific Analysis
+
+### Single-Threaded Workloads: Why Vertical Scaling Helps More
+
+A single-threaded workload can only use one CPU core at a time for a given task. This includes scripts processing files sequentially, some legacy applications, Node.js processes doing CPU-heavy computation, certain video encoding operations, and some game servers.
+
+**The core problem:**
+
+```
+Server A = 4 cores @ 2 GHz
+Server B = 32 cores @ 2 GHz
+
+If your application can only use one core:
+  → 28 extra cores sit mostly idle
+  → Adding more servers (horizontal) doesn't make one task finish faster
+```
+
+**What actually helps:**
+
+- Faster CPU frequency
+- Larger cache
+- Better single-core performance
+
+**Example:**
+
+```
+One image-processing job:
+  10 seconds on a 3 GHz CPU
+
+Moving to a 5 GHz CPU:
+  → ~6 seconds (40% faster)
+
+Adding 10 more servers:
+  → Still 10 seconds per job (no improvement)
+  → Unless you can split the work across servers
+```
+
+<Callout type="warning">
+**Important caveat:** If you have many independent single-threaded jobs, horizontal scaling works well. For example, 1,000 video files to encode where each process uses only one core — you can run them across servers in parallel. Horizontal scaling helps because you're increasing throughput, even though each individual job is single-threaded.
+</Callout>
+
+### "Every Request Is Stateless Anyway" → Not Necessarily
+
+A stateless API means any server can handle any request without needing memory from previous requests.
+
+**Truly stateless request:**
+
+```
+GET /products/123
+  → Server reads data from database and responds
+  → No local memory needed
+  → Any server can handle it
+```
+
+This is why stateless services scale horizontally so easily:
+
+```
+          Load Balancer
+                |
+    ------------------------
+    |          |          |
+ Server A   Server B   Server C
+
+Requests can go anywhere.
+```
+
+**Stateful example:**
+
+```
+User login
+   ↓
+Server A stores session in memory
+
+Next request:
+User request
+   ↓
+Server B receives it
+
+Server B doesn't know the session → Request fails
+
+Now you need: Sticky sessions, session replication, shared cache
+  → Complicates scaling
+```
+
+**The takeaway:** Most modern API requests are stateless (REST, GraphQL, microservices with JWT), but not all applications are. The distinction matters.
+
+### Video Encoding: Why Vertical Scaling Is Often Recommended
+
+Video encoding is a special case. When encoding one 4K movie, the encoder may already be using all available cores on one machine efficiently. Giving it more RAM, a faster CPU, or a better GPU often improves performance more than spreading that one encoding job across multiple servers.
+
+**Example:**
+
+```
+Encoding one movie:
+  1 server, 64 cores → 20 minutes
+
+Splitting across servers:
+  4 servers, 16 cores each
+  → Requires chunking video, synchronization, reassembly
+  → Much more complex with no real gain
+```
+
+So upgrading one machine is usually easier. But large platforms like YouTube and Netflix encode thousands of videos simultaneously — they don't process one video across hundreds of servers. Instead, they use horizontal scaling of jobs: Video 1 → Server A, Video 2 → Server B, Video 3 → Server C.
+
+### ML Training: Why Vertical Scaling Is Often Preferred
+
+Training a neural network requires constant communication between processors:
+
+```
+GPU 1 computes gradients
+GPU 2 computes gradients
+GPU 3 computes gradients
+GPU 4 computes gradients
+
+After every training step, they must synchronize → Communication becomes expensive
+```
+
+A single machine with 8 GPUs, NVLink/high-speed interconnects, and huge RAM is often far more efficient than 8 separate machines with 1 GPU each, because network communication is much slower than internal GPU communication.
+
+**Example:**
+
+```
+A model may train:
+  2 days on one 8-GPU server
+  but 4-5 days on 8 separate machines
+  because synchronization overhead dominates
+```
+
+Modern large AI systems (OpenAI, Google DeepMind, Meta AI) use both vertical and horizontal scaling, but they typically maximize vertical scaling within a node first, then scale across nodes.
+
+## Auto-Scaling
+
+Auto-scaling automatically adjusts compute capacity based on demand. It's the bridge between vertical and horizontal — you start with vertical, but when you need horizontal, auto-scaling makes it manageable.
+
+### How Auto-Scaling Works
+
+```
+Cloud Provider (AWS/GCP/Azure)
+         │
+         ▼
+┌─────────────────────────┐
+│   Auto-Scaling Group    │
+│                         │
+│  Min: 2 instances       │
+│  Max: 20 instances      │
+│  Desired: 3 (default)  │
+│                         │
+│  Scale Up: CPU > 70%    │
+│  Scale Down: CPU < 30%  │
+└─────────────────────────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│ Inst1 │ │ Inst2 │ │ Inst3 │
+└───────┘ └───────┘ └───────┘
+```
+
+### Key Metrics for Auto-Scaling
+
+| Metric | Use Case | How It Works |
+| --- | --- | --- |
+| **CPU utilization** | Compute-bound workloads | Scale up when CPU &gt; 70%, down when &lt; 30% |
+| **Memory utilization** | Memory-bound workloads | Scale up when RAM &gt; 80% |
+| **Request count per target** | API servers | Scale when requests/sec > threshold per instance |
+| **Queue depth** | Background workers | Scale when SQS/Kafka queue depth &gt; 1000 |
+| **Custom CloudWatch metrics** | Domain-specific signals | Business metrics (e.g., orders/second) |
+| **Scheduled scaling** | Predictable patterns | Scale up at 9am, down at 6pm for office apps |
+
+### Auto-Scaling Strategies
+
+**Target Tracking:** Maintain a target metric value (e.g., keep CPU at 50%). Auto-scaling adds/removes instances to hit target.
+
+**Step Scaling:** Scale based on CloudWatch alarm thresholds. CPU &gt; 70% → add 2 instances. CPU &gt; 90% → add 4 instances.
+
+**Predictive Scaling:** ML-based. Learns traffic patterns and pre-scales before anticipated spikes (e.g., Black Friday, product launches).
+
+### Auto-Scaling Gotchas
+
+1. **Startup time:** New instances take 30-60 seconds to boot. Pre-warm with minimum instances.
+2. **Connection draining:** Don't kill instances with active connections. Use connection draining (deregistration delay).
+3. **Cascading scale-down:** Removing too many instances at once can cause remaining instances to overload → scale up → oscillation. Add cooldown periods.
+4. **Stateful services:** Auto-scaling works best for stateless apps. Stateful services (databases) need different strategies.
+
+## Real-World Examples
+
+### Stack Overflow — Textbook Vertical Scaling
+
+Stack Overflow ran their entire Q&A on **11 web servers** with SQL Server boxes (384GB RAM, 4TB SSD). They served **209 million HTTP requests/day** with just 11 servers.
+
+Why it works:
+
+- Highly optimized code (very few queries per page)
+- Aggressive caching (Redis, in-memory)
+- Simple architecture (monolith)
+- Low write-to-read ratio (mostly reads)
+
+### OpenAI/ChatGPT — Hybrid Scaling
+
+OpenAI scaled PostgreSQL **vertically** on Azure with:
+
+- Single primary instance (large vertical)
+- ~50 read replicas across multiple regions
+- PgBouncer for connection pooling (50ms → 5ms connection time)
+- Exploring cascading replication to scale beyond 100 replicas
+
+### Netflix — Horizontal Everything
+
+Netflix runs thousands of microservices, each horizontally scaled:
+
+- 1000+ microservices
+- Thousands of instances
+- Auto-scaling based on traffic patterns
+- Multi-region (US, Europe, Asia)
+
+## Decision Framework
+
+```
+Small scale (< 10K users) → Vertical scaling
+Medium scale (10K-1M users) → Vertical + read replicas
+Large scale (1M+ users) → Horizontal + sharding
+Spiky traffic → Auto-scaling
+```
+
+<Callout type="info">
+**Interview Tip:** "Start vertical — it's simpler and cheaper at small scale. Go horizontal when you hit hardware limits, need HA, or have spiky traffic. Stateless is the prerequisite for horizontal scaling."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The question isn't 'horizontal or vertical?' — it's 'what is the stateful component?' Databases are vertical-first. Everything else is horizontal-first."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Auto-scaling is the bridge: you start vertical, and when you need horizontal, auto-scaling makes it manageable without a team of 10 DevOps engineers."
+</Callout>
+
+---
+
+## Further Reading
+
+- [AWS Auto Scaling Documentation](https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html)
+- [Google Cloud autoscaling overview](https://cloud.google.com/compute/docs/autoscaler)
+- [Stack Overflow Architecture](https://nickcraver.com/blog/2016/02/17/stack-overflow-the-architecture-2016-edition/)
+- [OpenAI on scaling PostgreSQL (YouTube)](https://www.youtube.com/watch?v=DJ1cpmJBlc4)
+- [System Design Primer — Scaling](https://github.com/donnemartin/system-design-primer#horizontal-vs-vertical-scaling)

@@ -1,0 +1,357 @@
+---
+title: Rate Limiting
+---
+
+import { Callout } from 'nextra/components'
+
+# Rate Limiting
+
+> Rate limiting caps request rate per client to protect your system from abuse, ensure fair resource allocation, and maintain availability. The algorithm is easy. The hard part is enforcing a single logical limit across 500 gateway nodes without turning every request into a Redis round trip.
+
+## Why Rate Limiting Matters
+
+```
+Without rate limiting:
+  Client sends 10,000 req/sec → Server crashes → All users affected
+
+With rate limiting:
+  Client sends 10,000 req/sec → Rate limiter → 429 Too Many Requests
+  Server stays healthy → Other users unaffected
+```
+
+**Use cases:**
+
+- Prevent abuse (DDoS, brute force)
+- Ensure fair resource allocation (free tier: 100 req/min, paid: 10,000 req/min)
+- Protect backend services from overload
+- Comply with third-party API limits
+
+## Rate Limiting Algorithms
+
+### 1. Token Bucket (Default Choice)
+
+**How it works:**
+
+```
+Bucket: capacity C tokens, refills at rate R tokens/sec
+
+  ┌─────────────────────┐
+  │  ● ● ● ● ● ● ● ●  │  ← Bucket with tokens
+  │  ● ● ● ● ●         │
+  └─────────────────────┘
+       ↑ Each request consumes 1 token
+       If empty → reject (HTTP 429)
+```
+
+**Flow:**
+
+1. Bucket starts full (e.g., 100 tokens)
+2. Each request consumes 1 token
+3. Tokens refill at fixed rate (e.g., 10/sec)
+4. If bucket empty → reject with 429
+
+**Characteristics:**
+
+- Allows bursts up to capacity C
+- Cheap to compute (2 numbers: tokens + last_refill_time)
+- **Default choice** for API rate limiting
+- Used by AWS, Stripe, most API gateways
+
+**Implementation:**
+
+```python
+class TokenBucket:
+    def __init__(self, capacity, refill_rate):
+        self.capacity = capacity
+        self.tokens = capacity
+        self.refill_rate = refill_rate
+        self.last_refill = time.time()
+    
+    def allow(self):
+        now = time.time()
+        elapsed = now - self.last_refill
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_refill = now
+        
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
+```
+
+### 2. Leaky Bucket
+
+**How it works:**
+
+```
+Requests enter a FIFO queue → drained at fixed rate R
+
+  ┌─────────────────────┐
+  │  → → → → → → → →   │  Queue
+  └────────┬────────────┘
+           │ Fixed rate drain
+           ▼
+     Smooth output
+```
+
+**Characteristics:**
+
+- Produces perfectly smooth output rate
+- Cannot burst. Adds latency
+- Used in network devices (traffic shaping)
+- Usually wrong for API rate limiting
+
+### 3. Fixed Window Counter
+
+**How it works:**
+
+```
+Window: 12:00-12:01    Window: 12:01-12:02
+┌──────────────────┐   ┌──────────────────┐
+│ Count: 99        │   │ Count: 100       │
+│ Limit: 100       │   │ Limit: 100       │
+└──────────────────┘   └──────────────────┘
+
+Problem: 99 requests at 11:59:59 + 100 at 12:00:01
+         = 199 requests in 2 seconds (2x burst!)
+```
+
+**Characteristics:**
+
+- Trivial to implement
+- **Boundary burst problem:** up to 2x allowed rate at window edges
+- Memory: 1 counter per key
+
+### 4. Sliding Window Log
+
+**How it works:** Store timestamp of every request. Count requests in last N seconds.
+
+```
+Redis sorted set:
+ZADD rate_limit:user123 <timestamp> <request_id>
+ZREMRANGEBYSCORE rate_limit:user123 0 <now - window>
+ZCARD rate_limit:user123  →  count
+```
+
+**Characteristics:**
+
+- Exact accuracy, no boundary burst
+- Memory-intensive (stores every timestamp)
+- Implementation: Redis sorted set
+
+### 5. Sliding Window Counter (Recommended)
+
+**How it works:** Hybrid approach using two fixed windows:
+
+```
+effective_count = current_window_count + 
+                  previous_window_count × overlap_percentage
+
+Example: limit=100/min, current=30, previous=70, 40% elapsed
+  effective = 30 + 70 × (1 - 0.4) = 30 + 42 = 72 → Allow
+```
+
+**Characteristics:**
+
+- Within ~1% of true sliding window
+- Memory: 2 counters per user
+- **Used by Cloudflare, GitHub, most production systems**
+
+### 6. GCRA (Generic Cell Rate Algorithm)
+
+**How it works:** Calculate the theoretical arrival time (TAT) for the next request:
+
+```
+TAT = max(TAT, now) + increment
+If TAT - now <= tolerance: allow
+Else: reject
+```
+
+**Characteristics:**
+
+- Exact accuracy
+- Configurable burst tolerance
+- Memory: 1 scalar (TAT) per key
+- Used by Cloudflare
+
+## Algorithm Comparison
+
+| Algorithm | State per Key | Accuracy | Burst Behavior | Memory |
+| --- | --- | --- | --- | --- |
+| **Token bucket** | 2 fields | Exact | Configurable burst | Low |
+| **Leaky bucket** | Queue + drain | Exact | No burst (smooth) | Medium |
+| **Fixed window** | 1 counter | 2x boundary burst | Uncontrolled | Minimal |
+| **Sliding window log** | Sorted set | Exact | None | High |
+| **Sliding window counter** | 2 integers | ~1% error | None | Low |
+| **GCRA** | 1 scalar (TAT) | Exact | Configurable | Minimal |
+
+## Distributed Rate Limiting
+
+**Problem:** Multiple API servers, each with local counters → client can hit N/10 on each of 10 servers = no effective limit.
+
+```
+10 servers, each with local counter (limit: 100/min)
+  Server 1: allows 100 requests from user
+  Server 2: allows 100 requests from user
+  ...
+  Server 10: allows 100 requests from user
+  
+  Total: 1000 requests/min (10x intended limit!)
+```
+
+**Solution:** Centralized Redis with atomic Lua scripts.
+
+### Token Bucket in Redis (Atomic)
+
+```lua
+-- Token bucket in Redis (atomic Lua script)
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local requested = tonumber(ARGV[4])
+
+local data = redis.call('HMGET', key, 'tokens', 'last_refill')
+local tokens = tonumber(data[1]) or capacity
+local last_refill = tonumber(data[2]) or now
+
+-- Refill tokens
+local elapsed = now - last_refill
+tokens = math.min(capacity, tokens + elapsed * rate)
+
+if tokens >= requested then
+    tokens = tokens - requested
+    redis.call('HMSET', key, 'tokens', tokens, 'last_refill', now)
+    redis.call('EXPIRE', key, math.ceil(capacity / rate) * 2)
+    return 1  -- allow
+else
+    return 0  -- reject
+end
+```
+
+### Performance Optimization: Two-Tier Scheme
+
+**Problem:** Every request hitting Redis adds ~1ms latency.
+
+**Solution:** Two-tier rate limiting (used by Cloudflare, Envoy):
+
+```
+Tier 1: Local token bucket (in-memory)
+  - Each gateway borrows a chunk of tokens from Redis (e.g., 10 at a time)
+  - Consumes locally until chunk exhausted
+  - Borrows again from Redis
+
+Tier 2: Global Redis token bucket
+  - Authoritative token count
+  - Issues chunks to gateways on demand
+
+Result: Reduces Redis traffic by 10x, accuracy within 6%
+```
+
+```
+Gateway 1: borrows 10 tokens → serves 10 requests locally → borrows again
+Gateway 2: borrows 10 tokens → serves 10 requests locally → borrows again
+Gateway 3: borrows 10 tokens → serves 8 requests → returns 2 unused
+```
+
+## Rate Limiting Headers
+
+Standard HTTP headers for rate limiting:
+
+| Header | Description | Example |
+| --- | --- | --- |
+| `X-RateLimit-Limit` | Max requests allowed in window | `X-RateLimit-Limit: 100` |
+| `X-RateLimit-Remaining` | Requests left in current window | `X-RateLimit-Remaining: 42` |
+| `X-RateLimit-Reset` | When window resets (epoch timestamp) | `X-RateLimit-Reset: 1678886400` |
+| `Retry-After` | Seconds to wait before retrying | `Retry-After: 30` |
+| `RateLimit-Policy` | Server-defined policy description | `"default";q=100;w=30` |
+
+**Example response when rate limited:**
+
+```
+HTTP/1.1 429 Too Many Requests
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1678886400
+Retry-After: 30
+
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Too many requests. Try again in 30 seconds."
+  }
+}
+```
+
+## Rate Limiting Scopes
+
+| Scope | Purpose | Implementation |
+| --- | --- | --- |
+| **Per-user** | Prevent single user from overwhelming system | Key: `rate_limit:{user_id}` |
+| **Per-API endpoint** | Protect specific expensive endpoints | Key: `rate_limit:{endpoint}` |
+| **Global** | Protect overall system capacity | Key: `rate_limit:global` |
+| **Per-tier** | Different limits for free/pro/enterprise | Key: `rate_limit:{user_id}:{tier}` |
+| **Per-IP** | Prevent anonymous abuse | Key: `rate_limit:{ip}` |
+
+## Fail-Open vs Fail-Closed
+
+| Behavior | When Rate Limiter Fails | Use Case |
+| --- | --- | --- |
+| **Fail-open** | Allow all requests | Default — rate limiter is protective, not security |
+| **Fail-closed** | Reject all requests | Security boundaries (login attempts, OTP) |
+
+<Callout type="warning">
+**Why fail-open?** Rate limiting is protective, not critical. If rate limiter fails, the API should still work. Better to allow extra requests than block all requests. Monitoring will detect the issue.
+
+**When to fail-closed:** Security boundaries (brute force protection), compliance requirements (regulatory limits), cost protection (API billing limits).
+</Callout>
+
+## Real-World Examples
+
+### Stripe
+
+- Token bucket algorithm
+- Per-key rate limits (API keys, IDs)
+- Idempotency keys for duplicate prevention
+- Returns `429 Too Many Requests` with `Retry-After` header
+- Fails open by default
+
+### GitHub
+
+- Sliding window counter
+- Per-user and per-IP limits
+- Different limits for authenticated vs unauthenticated
+- Returns `X-RateLimit-*` headers
+
+### Cloudflare
+
+- GCRA algorithm
+- Two-tier distributed rate limiting
+- Per-IP, per-ASN, per-endpoint limits
+- Edge rate limiting (at CDN nodes)
+
+<Callout type="info">
+**Interview Tip:** "Token bucket is the default choice for user-facing APIs with burst needs. Sliding window counter for strict endpoint caps."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The hard part isn't the algorithm — it's enforcing a single logical limit across 500 gateway nodes without turning every request into a Redis round trip."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "The single biggest Staff-level signal is failure behavior: a rate limiter must fail open, never becoming the outage it was designed to prevent."
+</Callout>
+
+<Callout type="info">
+**Interview Tip:** "Rate limiting is not a replacement for proper authentication and authorization. It's defense-in-depth."
+</Callout>
+
+---
+
+## Further Reading
+
+- [Stripe Rate Limiting](https://stripe.com/docs/rate-limits)
+- [GitHub Rate Limit Docs](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting)
+- [Cloudflare Rate Limiting](https://developers.cloudflare.com/waf/rate-limiting-rules/)
+- [Cloudflare: How we built rate limiting capable of scaling to millions of domains](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/)
+- [Token Bucket Algorithm (Wikipedia)](https://en.wikipedia.org/wiki/Token_bucket)
