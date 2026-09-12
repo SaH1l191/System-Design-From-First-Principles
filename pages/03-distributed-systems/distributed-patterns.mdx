@@ -1,0 +1,188 @@
+---
+title: Distributed Systems Patterns
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.6 Distributed Systems Patterns
+
+> Distributed systems fail in predictable ways. These patterns provide standardized solutions to common failure modes.
+
+## Circuit Breaker Pattern
+
+Prevents cascading failures by stopping requests to a failing service.
+
+### Why Circuit Breakers Exist
+
+```
+Without Circuit Breaker:
+  Service A calls Service B (down)
+  -> Waits 30 seconds for timeout
+  -> Thread blocked, connection held
+
+  1000 concurrent requests -> 1000 threads blocked
+  -> Thread pool exhausted -> Service A unresponsive
+  -> Cascading failure
+```
+
+### How Circuit Breakers Work
+
+```
+CLOSED (Normal):
+  Requests flow normally, failures counted
+  Failure count > threshold -> OPEN
+
+OPEN (Failing):
+  All requests immediately rejected with fallback
+  No requests reach Service B
+  After cooldown -> HALF-OPEN
+
+HALF-OPEN (Testing):
+  Allow a few requests through
+  Success -> CLOSED (recovered)
+  Failure -> OPEN (still failing)
+```
+
+### Configuration
+
+| Parameter | Typical Value | Purpose |
+| --- | --- | --- |
+| **failureRateThreshold** | 50% | Trip when 50% fail |
+| **waitDurationInOpenState** | 30s | Stay open before testing |
+| **slidingWindowSize** | 10-100 calls | Window for failure rate |
+| **minimumNumberOfCalls** | 5-10 | Minimum calls before evaluating |
+
+## Bulkhead Pattern
+
+Isolates components so a failure in one does not cascade to others.
+
+```
+Without Bulkhead:
+  Service A -> Service B (shared pool: 100 connections)
+  B slows down -> All 100 connections consumed
+  Service C is healthy but unavailable (no connections)
+
+With Bulkhead:
+  Service A -> Service B (dedicated pool: 50)
+  Service A -> Service C (dedicated pool: 50)
+  B slows down -> Only B's pool exhausted
+  C remains available
+```
+
+## Retry Pattern with Exponential Backoff
+
+```
+Without jitter (thundering herd):
+  T=0:    1000 clients fail
+  T=100:  All 1000 retry simultaneously -> overload!
+
+With jitter:
+  T=80-120: Clients retry at different times (scattered)
+  Load distributed
+```
+
+**Jitter formulas:**
+```
+Full Jitter:     delay = random(0, base * 2^attempt)
+Equal Jitter:    delay = base * 2^attempt / 2 + random(0, base * 2^attempt / 2)
+Decorrelated:    delay = min(cap, random(base, previous_delay * 3))
+```
+
+**When NOT to retry:** 400, 401, 403, 404, 422 (client errors). **DO retry:** 408, 429, 500, 502, 503, 504, connection refused.
+
+## Timeout Pattern
+
+Every outbound call must have a timeout.
+
+```
+Without timeout:
+  Service A -> Service B (slow)
+  1000 threads blocked = Service A is dead
+
+With timeout (5s):
+  After 5s: Timeout! Return error. Thread released.
+  Service A remains responsive.
+```
+
+| Call Type | Recommended Timeout |
+| --- | --- |
+| Internal API | 1-5s |
+| External API | 5-15s |
+| Database query | 1-10s |
+| ML inference | 10-60s |
+
+## Fallback Pattern
+
+Return a degraded but acceptable response when a service fails.
+
+```
+Primary: Real-time price from pricing service
+Fallback: Cached price from last hour
+
+Primary: Personalized recommendations from ML
+Fallback: Popular items (pre-computed)
+```
+
+## Load Shedding
+
+Drop low-priority requests to protect high-priority ones under overload.
+
+```
+P0: Payment processing (never shed)
+P1: Core API (shed only at extreme load)
+P2: Analytics events (shed first)
+P3: Background jobs (shed at moderate load)
+```
+
+## Graceful Degradation
+
+```
+Full: Personalized feed with recommendations
+Degraded (ML down): Chronological feed (no recommendations)
+Degraded further (search down): Static content only
+```
+
+## Health Check Pattern
+
+```
+GET /health -> {
+  "status": "healthy",
+  "checks": {
+    "database": "connected",
+    "redis": "connected",
+    "payment_service": "degraded"
+  }
+}
+
+Liveness: Is the process alive? (restart if not)
+Readiness: Can it handle requests? (remove from LB if not)
+```
+
+## Ambassador and Sidecar Patterns
+
+**Ambassador:** Helper process handling network communication (retries, circuit breaking, TLS).
+
+**Sidecar:** Helper process alongside main app (Envoy/Istio proxy for mTLS, load balancing, observability).
+
+## Pattern Summary
+
+| Pattern | Problem Solved | When to Use |
+| --- | --- | --- |
+| **Circuit Breaker** | Cascading failures | Every inter-service call |
+| **Bulkhead** | Resource exhaustion | Multiple downstream dependencies |
+| **Retry + Backoff** | Transient errors | Idempotent operations |
+| **Timeout** | Resource leaks | Every outbound call |
+| **Fallback** | Service unavailability | Non-critical features |
+| **Load Shedding** | System overload | High-traffic systems |
+| **Graceful Degradation** | Partial failures | User-facing services |
+| **Health Check** | Failure detection | Every service |
+
+## Interview Tips
+
+> "Circuit breaker is the single most important resilience pattern. Without it, one failing service takes down the entire system."
+
+> "Every outbound call needs: timeout, retry with exponential backoff, and circuit breaker. This is non-negotiable."
+
+> "Load shedding is the art of deciding what to drop when you cannot serve everything."
+
+---

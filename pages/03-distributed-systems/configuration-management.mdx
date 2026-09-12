@@ -1,0 +1,115 @@
+---
+title: Configuration Management
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.9 Configuration Management
+
+> Configuration management ensures services have correct settings across all environments. It must handle dynamic updates, secrets, and environment-specific values without requiring restarts.
+
+## The Configuration Problem
+
+```
+Without centralized config:
+  Service A (dev):  DB_HOST=localhost:5432
+  Service A (prod): DB_HOST=prod-db.internal:5432
+  
+  Problems:
+  1. Config scattered across deployment scripts
+  2. Changing DB_HOST requires updating every service
+  3. Secrets in code = security risk
+  4. No audit trail of config changes
+```
+
+## Centralized Configuration
+
+```
+Config Store (etcd/Consul/AWS Parameter Store)
+  /services/api-service/config -> db_host, db_port, cache_ttl
+  /services/worker-service/config -> queue_url, batch_size
+  /secrets/api-service -> db_password (encrypted)
+```
+
+### Benefits
+
+1. Single source of truth
+2. Dynamic updates (no restart)
+3. Audit trail
+4. Environment separation (/config/dev, /config/prod)
+5. Secrets management (encrypted)
+
+## Feature Flags
+
+Enable/disable features without deployment.
+
+```
+Feature flag store:
+  dark_mode: true
+  new_checkout: false
+  beta_features: true
+
+Application: if feature_flag.isEnabled("dark_mode"): showDarkMode()
+Operations: Toggle flag -> Feature enabled/disabled instantly
+```
+
+**Types:** Boolean, percentage rollouts, user segment, time-based, A/B test.
+
+| Tool | Type |
+| --- | --- |
+| **LaunchDarkly** | Managed SaaS |
+| **Unleash** | Self-hosted, open-source |
+| **Flagsmith** | Self-hosted/managed |
+| **Custom (Redis)** | DIY |
+
+### Best Practices
+
+1. Name flags clearly (enable_dark_mode, not feature_1)
+2. Remove old flags after full rollout
+3. Default to safe value if flag system is down
+4. Test both paths (flag ON and OFF)
+
+## Dynamic Configuration
+
+```
+Push-based: Config store pushes changes to service (etcd watch)
+Pull-based: Service polls config store (Spring Cloud Config)
+Hybrid: Pull for initial load, push for updates (best of both)
+```
+
+## Secrets Management
+
+| Solution | Encryption | Access Control | Rotation |
+| --- | --- | --- | --- |
+| **HashiCorp Vault** | AES-256 | Policies, tokens | Automatic |
+| **AWS Secrets Manager** | KMS | IAM policies | Automatic |
+| **Azure Key Vault** | HSM | RBAC | Automatic |
+| **Kubernetes Secrets** | Base64 (not encryption) | RBAC | Manual |
+
+### Secret Injection
+
+```
+1. Environment variables (simple, visible in process listing)
+2. File mount (more secure, not visible in env)
+3. Init container (fetches secrets to shared volume)
+4. Sidecar (refreshes automatically)
+```
+
+## Twelve-Factor App Configuration
+
+```
+1. Config in environment variables
+2. Separate config from code
+3. Treat backing services as attached resources
+4. Strict separation of config (dev/staging/prod)
+```
+
+## Interview Tips
+
+> "Configuration management separates what varies (config) from what stays the same (code)."
+
+> "Feature flags are the safest way to roll out new features. Enable for 1%, monitor, gradually increase."
+
+> "Never store secrets in code or version control. Use a secrets manager and inject via environment variables or file mounts."
+
+---

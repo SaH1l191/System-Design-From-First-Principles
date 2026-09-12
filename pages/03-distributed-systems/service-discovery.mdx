@@ -1,0 +1,154 @@
+---
+title: Service Discovery
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.8 Service Discovery
+
+> In dynamic environments (containers, auto-scaling), services cannot rely on hardcoded IP addresses. Service discovery provides a mechanism for services to find each other dynamically.
+
+Service discovery only became a first-class problem once infrastructure stopped being static. When a service ran on the same three named servers for years, hardcoding `db-server-1.internal` was fine — the address never changed. Containers, auto-scaling groups, and spot instances broke that assumption completely: an instance's IP is now a fact that can change every few minutes, and a service might have anywhere from one to hundreds of interchangeable instances alive at any given moment. Service discovery is the answer to "given that instances appear and disappear constantly, how does anything find anything?"
+
+## The Problem
+
+```
+Without service discovery:
+  Service A hardcodes: Service B = 10.0.0.5:8080
+
+  Problems:
+  1. B restarts on 10.0.0.7 -> A is broken
+  2. B scales to 3 instances -> A only knows one
+  3. 50 services each hardcode 10 others -> config nightmare
+```
+
+## Two Approaches
+
+### Client-Side Discovery
+
+```
+Client -> Registry: "Where is Service B?"
+Registry -> Client: [10.0.0.5:8080, 10.0.0.6:8080, 10.0.0.7:8080]
+Client: Load balances, calls Service B directly
+```
+
+**Pros:** No additional hop. **Cons:** Client must implement discovery logic.
+
+### Server-Side Discovery
+
+```
+Client -> Load Balancer: "Service B"
+Load Balancer -> Registry: "Where is B?"
+Registry -> Load Balancer: [instances]
+Load Balancer -> Service B
+```
+
+**Pros:** Client is simple. **Cons:** Extra network hop.
+
+## Who Registers a Service: Self vs Third-Party
+
+Both approaches above assume the registry already has an accurate, current list of instances. *Getting* instances into the registry in the first place is a separate design decision:
+
+```
+SELF-REGISTRATION
+  Service instance B starts up
+    -> B calls Registry directly: "I'm alive at 10.0.0.7:8080"
+    -> B sends periodic heartbeats to stay registered
+    -> B calls Registry on graceful shutdown: "I'm leaving"
+
+  Pros: simple, no extra moving parts.
+  Cons: couples every service to the registry's client library/API;
+        if B crashes hard (no graceful shutdown), it stays registered
+        until a heartbeat timeout catches it — a stale-entry window.
+
+THIRD-PARTY REGISTRATION (Registrar)
+  Service instance B starts up (knows nothing about the registry)
+    -> Orchestrator (Kubernetes, Nomad) notices B is running
+    -> A separate Registrar process registers B on its behalf
+    -> Orchestrator also deregisters B the moment it's terminated
+
+  Pros: services stay decoupled from discovery infrastructure entirely.
+  Cons: one more moving part (the registrar) that itself needs to be reliable.
+```
+
+Kubernetes is the dominant example of third-party registration today: pods never call an API to register themselves — the control plane already knows every pod's lifecycle and updates Endpoints/DNS automatically. This is why "how does Kubernetes do service discovery" and "how would you build service discovery from scratch" often have different right answers: production systems increasingly let the orchestrator be the registrar, rather than adding registration logic to every service.
+
+## Service Registry
+
+| Registry | Consistency | Watch | Use Case |
+| --- | --- | --- | --- |
+| **etcd** | Strong (Raft) | Long-polling | Kubernetes, Consul |
+| **ZooKeeper** | Strong (ZAB) | Watch | Hadoop, Kafka (legacy) |
+| **Consul** | Strong (Raft) | Long-polling | Multi-datacenter |
+| **Eureka** | Eventual | Long-polling | Netflix OSS (legacy) |
+| **Nacos** | Configurable | Push (gRPC) | Alibaba Cloud |
+
+### The Registry Is Itself a Distributed System (and Faces CAP)
+
+It's easy to treat the registry as infrastructure that "just works," but it's a distributed system like any other, and it makes its own [CAP](/03-distributed-systems/cap-theorem) tradeoff:
+
+- **etcd, ZooKeeper, Consul (CP):** use a consensus protocol (Raft/ZAB) to keep the registry strongly consistent. During a network partition, the minority side stops accepting writes rather than risk two conflicting views of "which instances are alive." Correct, but a partition can make *registration itself* briefly unavailable.
+- **Eureka (AP):** deliberately chose availability over consistency. If Eureka nodes can't reach each other or lose too many heartbeats, they enter **self-preservation mode** — instead of aggressively deregistering instances it can no longer confirm are healthy, it keeps serving the last-known-good registry state, on the theory that a stale list of mostly-correct instances is safer for callers than an empty or drastically-shrunk list during what might just be a monitoring blip, not a real outage.
+
+<Callout type="warning">
+This is a genuinely important design choice, not a footnote: a CP registry can make your *entire system* unavailable during a partition, even if every actual service instance is healthy and reachable — because the registry itself refuses to answer "where is service B?" until it regains quorum. Choosing a registry is choosing how much you're willing to let discovery-layer consistency become a single point of failure for the whole architecture.
+</Callout>
+
+### Health Checking
+
+```
+Active:  Registry probes service (GET /health)
+Passive: Services report failures to registry
+Client-side: Client checks health locally
+```
+
+## Service Discovery in Kubernetes
+
+```
+1. DNS-based: service-b.default.svc.cluster.local -> ClusterIP -> kube-proxy routes to pod
+2. Environment variables: SERVICE_B_HOST, SERVICE_B_PORT
+3. Headless services: DNS returns individual pod IPs (for stateful sets)
+```
+
+## Service Mesh (Sidecar-Based)
+
+```
+Pod:
+  Application (Service B) <---> Envoy Sidecar
+                                 - Service discovery
+                                 - Load balancing
+                                 - Circuit breaking
+                                 - mTLS
+```
+
+Used by: Istio, Linkerd, Consul Connect
+
+## Comparing the Four Approaches
+
+| Approach | Extra network hop? | Client complexity | Failure isolation | Best for |
+|---|---|---|---|---|
+| **Client-side discovery** | No | High — every client implements lookup + load-balancing logic | Registry outage affects new lookups, not existing connections | Polyglot services where you control the client library (Netflix's original model) |
+| **Server-side discovery** | Yes (through the LB) | Low — client just calls a fixed address | LB is a single point of failure unless itself replicated | Simpler clients, especially external/public-facing traffic |
+| **DNS-based (Kubernetes)** | No (resolves to a stable ClusterIP or pod IP) | Very low — just DNS | Depends on cluster DNS (CoreDNS) availability | Anything already running in Kubernetes |
+| **Service mesh (sidecar)** | Yes (through the local sidecar, not over the network) | Lowest — app code doesn't know discovery exists at all | Sidecar crash only affects its own pod, not the whole mesh | Large microservice fleets needing discovery + mTLS + observability uniformly |
+
+## Common Pitfalls
+
+- **Stale DNS caching.** Clients (and OS-level resolvers) cache DNS answers for a TTL. If an instance dies and a new one takes its IP-adjacent slot, clients holding a cached, now-dead entry keep failing until the TTL expires — this is why many service meshes bypass DNS caching assumptions entirely and query the registry directly, or use very short TTLs.
+- **Registry as an unexamined single point of failure.** Teams often harden every service against failure but never load-test what happens when the registry itself is slow or briefly unavailable — every dependent service can degrade simultaneously.
+- **Thundering herd on mass re-registration.** If a registry restarts or a large deployment rolls out at once, hundreds of instances registering/re-registering in a short window can itself overload the registry — production systems add jitter to registration/heartbeat intervals specifically to avoid this.
+- **Treating "registered" as "ready."** An instance can be present in the registry the instant it starts, before it's actually finished initializing (warming caches, connecting to its own dependencies). Readiness checks (see [Observability](/08-observability/observability-fundamentals)) exist precisely to separate "the process exists" from "the process can correctly serve traffic."
+
+## Interview Tips
+
+> "Service discovery solves finding services in dynamic environments. Client-side gives control. Server-side keeps client simple."
+
+> "The registry must be highly available. If it goes down, no service can find any other service."
+
+> "Kubernetes has built-in service discovery via DNS. For non-Kubernetes, use Consul or etcd."
+
+> "The registry is a distributed system in its own right, and it makes its own CAP choice — a strongly consistent registry (etcd, ZooKeeper) can become a single point of failure during a partition, which is exactly why Eureka chose availability and self-preservation mode instead."
+
+> "If asked to design service discovery from scratch, the strongest structure is: pick a registration model (self vs third-party), pick a registry consistency model (CP vs AP) and justify it by what's worse — a stale registry entry or a briefly-unavailable registry — then pick client-side vs server-side lookup based on how much discovery logic you want to push into every client."
+
+---

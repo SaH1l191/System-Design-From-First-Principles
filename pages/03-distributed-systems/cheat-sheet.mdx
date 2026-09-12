@@ -1,0 +1,132 @@
+---
+title: Interview Cheat Sheet — Stage 3
+---
+
+import { Callout } from 'nextra/components'
+
+# Quick Reference: Stage 3 Decision Framework
+
+## CAP / PACELC Choice
+
+```
+Financial transactions, inventory     -> CP / PC-EC
+Social feeds, shopping carts          -> AP / PA-EL
+Mixed workloads                       -> Tunable (Cassandra, DynamoDB)
+```
+
+## Consistency Model
+
+```
+Financial, leader election            -> Linearizability
+Collaborative editing                 -> Causal consistency
+User profile updates                  -> Read-your-writes
+Feed, timeline                        -> Monotonic reads
+Shopping cart                         -> Session consistency
+Analytics, DNS                        -> Eventual consistency
+```
+
+## Consensus Algorithm
+
+```
+New system, need understandability    -> Raft (etcd, CockroachDB)
+Google ecosystem                      -> Paxos (Spanner, Chubby)
+ZooKeeper ecosystem                   -> ZAB
+```
+
+## Distributed Transaction
+
+```
+Short, same-datacenter               -> 2PC
+Long-running, cross-service          -> Saga
+DB + event consistency               -> Outbox pattern
+Audit trail, temporal queries        -> Event Sourcing
+Read-heavy, complex queries          -> CQRS
+```
+
+## Resilience Pattern
+
+```
+Every inter-service call             -> Circuit breaker + timeout + retry
+Multiple downstream dependencies     -> Bulkhead
+Transient errors                     -> Retry with exponential backoff
+System overload                      -> Load shedding
+Non-critical features                -> Graceful degradation
+```
+
+## Service Discovery
+
+```
+Kubernetes                            -> Built-in DNS
+Non-Kubernetes, single DC            -> Consul
+AWS-native                           -> Cloud Map
+Service mesh                         -> Istio/Linkerd sidecar
+```
+
+---
+
+# Interview Cheat Sheet: Stage 3
+
+## CAP Theorem
+
+- Network partitions are inevitable -> Must choose CP or AP
+- CP: Reject requests during partition (etcd, ZooKeeper)
+- AP: Serve stale data during partition (Cassandra, DynamoDB)
+- Most systems: Tunable consistency
+
+## PACELC Theorem
+
+- Even without partitions, trade latency for consistency
+- PA/EL: Available + fast (Cassandra, DynamoDB)
+- PC/EC: Consistent + slower (etcd, ZooKeeper)
+
+## Consistency Models
+
+- Linearizability: Strongest (latest write always visible)
+- Causal: Cause-effect ordering preserved
+- Read-your-writes: User sees own writes
+- Eventual: All replicas eventually converge
+
+## Consensus
+
+- Raft: Practical, used by etcd, CockroachDB
+- All consensus algorithms: Require majority quorum (N/2 + 1)
+- FLP impossibility: Perfect consensus impossible in async systems
+
+## Distributed Transactions
+
+- 2PC: Strong consistency, blocking
+- Saga: Eventual consistency, no blocking
+- Outbox: Atomic DB write + event publish
+- CQRS: Separate read and write models
+
+## Resilience Patterns
+
+- Circuit breaker: Stop calling failing services
+- Bulkhead: Isolate resource pools per dependency
+- Retry + backoff: Handle transient failures
+- Timeout: Prevent resource leaks
+- Load shed: Drop low-priority traffic
+
+## Service Discovery
+
+- Client-side: Client queries registry
+- Server-side: Load balancer queries registry
+- Kubernetes: Built-in DNS
+- Registry must be highly available
+
+## Configuration
+
+- Separate config from code
+- Environment variables or centralized config store
+- Feature flags for safe rollouts
+- Secrets in vault, never in code
+
+---
+
+*Stage 3 covers distributed systems â€” the hardest and most important topic in system design. Master these concepts before moving to Stage 4: Messaging and Async.*
+
+---
+
+*Sources: DDIA (Martin Kleppmann), ByteByteGo, DesignGurus.io, Google Spanner paper, Apache Cassandra documentation, etcd documentation, HashiCorp Vault documentation, various system design courses and resources, AWS/GCP/Azure documentation.*
+
+*Last updated: June 22, 2026*

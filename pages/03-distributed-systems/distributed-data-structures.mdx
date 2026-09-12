@@ -1,0 +1,149 @@
+---
+title: Distributed Data Structures
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.7 Distributed Data Structures
+
+> Distributed systems need specialized data structures that work across multiple nodes. CRDTs allow concurrent updates without coordination. Vector clocks detect causality. Gossip protocols spread information efficiently.
+
+## CRDTs (Conflict-Free Replicated Data Types)
+
+Data structures designed so multiple replicas can be updated independently and concurrently, guaranteed to converge without coordination.
+
+### CRDT Properties
+
+```
+1. Commutative:  merge(A, B) = merge(B, A)
+2. Associative:  merge(merge(A, B), C) = merge(A, merge(B, C))
+3. Idempotent:   merge(A, A) = A
+```
+
+### Types of CRDTs
+
+**G-Counter (Grow-Only Counter):** Each node maintains its own counter. Total = sum of all.
+
+```
+Node A: 5, Node B: 3, Node C: 7
+G-Counter: {A:5, B:3, C:7} -> Total: 15
+```
+Use case: Likes, views, counts.
+
+**PN-Counter (Positive-Negative Counter):** Supports increment and decrement.
+
+```
+PN-Counter = G-Counter for + and G-Counter for -
+Total = sum(positive) - sum(negative)
+```
+Use case: Balance, quantity.
+
+**OR-Set (Observed-Remove Set):** Supports both add and remove.
+
+```
+Node A: add "milk" -> {milk}
+Node B: add "bread" -> {bread}
+A removes "milk", B adds "milk" concurrently
+Merge: {milk, bread} (milk survives)
+```
+Use case: Shopping cart items, collaborative lists.
+
+**LWW-Register:** Single value, resolved by timestamp. Use case: Profile field.
+
+### CRDTs in Production
+
+| System | Usage |
+| --- | --- |
+| **Redis** | CRDT-based Active-Active (Redis Enterprise) |
+| **Riak** | Built-in CRDT data types |
+| **Automerge** | Collaborative editing |
+| **Yjs** | Real-time collaboration |
+| **Apple Notes** | Offline sync |
+| **Figma** | Collaborative design |
+
+## Vector Clocks
+
+Track causal ordering of events across nodes. Detect concurrent operations.
+
+### How Vector Clocks Work
+
+```
+Each node maintains a vector (array) of counters, one per node.
+
+Node A writes x=1: VC: [A:1, B:0, C:0]
+Node B writes y=2: VC: [A:0, B:1, C:0]
+Node A reads B's VC: VC: [A:1, B:1, C:0]
+Node A writes z=3: VC: [A:2, B:1, C:0]
+```
+
+### Comparing Vector Clocks
+
+```
+X happened-before Y: vector(X) < vector(Y)
+Y happened-before X: vector(Y) < vector(X)
+Concurrent: Neither <= the other
+
+Example:
+  [A:1, B:0, C:0] vs [A:0, B:1, C:0]
+  Neither dominates -> Concurrent (conflict detected)
+```
+
+## Lamport Timestamps
+
+Simpler alternative to vector clocks. Total ordering but cannot detect concurrency.
+
+```
+Rules:
+1. Before any event, increment local clock
+2. Send message: include current clock
+3. Receive message: clock = max(local, received) + 1
+
+Total order: E1(1) < E2(2) < E3(3) < E4(4) < E5(5)
+```
+
+### Lamport vs Vector Clocks
+
+| Aspect | Lamport | Vector Clock |
+| --- | --- | --- |
+| **Size** | O(1) | O(N) |
+| **Ordering** | Total order only | Partial order + concurrency |
+| **Detects concurrency** | No | Yes |
+| **Use case** | Simple ordering | Conflict detection |
+
+## Gossip Protocol
+
+Each node periodically shares state with random peers. After O(log N) rounds, all N nodes know.
+
+### Gossip Variants
+
+```
+Push: Send state to random peer
+Pull: Ask random peer for state
+Push-Pull: Both simultaneously (fastest convergence)
+```
+
+### Properties
+
+- Eventual consistency: All nodes eventually have same state
+- Fault tolerant: Works with failures and lost messages
+- Scalable: O(log N) convergence, O(1) peers per round
+- Decentralized: No leader needed
+
+### Gossip in Production
+
+| System | Usage |
+| --- | --- |
+| **Cassandra** | Failure detection, cluster membership |
+| **Consul** | Failure detection, health propagation |
+| **Redis Cluster** | Cluster state propagation |
+| **SWIM** | Scalable failure detection (Consul, Serf) |
+
+## Interview Tips
+
+> "CRDTs are the answer to 'how do multiple nodes update the same data without coordination?' They guarantee convergence by mathematical properties."
+
+> "Vector clocks detect causality. Lamport timestamps provide ordering. Use vector clocks when you need to know if operations are concurrent."
+
+> "Gossip protocols are how clusters stay in sync without a central coordinator."
+
+---

@@ -1,0 +1,162 @@
+---
+title: Consensus Algorithms
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.4 Consensus Algorithms
+
+> Consensus algorithms allow distributed nodes to agree on a single value. They are the foundation of CP systems, used for leader election, distributed locking, and replicated state machines.
+
+## Why Consensus Matters
+
+```
+Without consensus:
+  Node A thinks Leader = Node A
+  Node B thinks Leader = Node B
+  Split brain! Two leaders -> data divergence
+
+With consensus:
+  All nodes agree: Leader = Node A
+  Single source of truth
+```
+
+**Applications:** Leader election, distributed locking, replicated state machines, configuration management, transaction commit.
+
+## The FLP Impossibility Result
+
+In 1985, Fischer, Lynch, and Paterson proved no deterministic consensus algorithm can guarantee agreement in an asynchronous system where even one process can crash. Real systems work around this with timeouts and failure detectors.
+
+## Paxos
+
+The oldest and most theoretically foundational consensus algorithm, proposed by Leslie Lamport in 1989.
+
+### Three Roles
+
+```
+Proposers:  Initiate proposals
+Acceptors:  Vote on proposals (majority must agree)
+Learners:   Learn the agreed-upon value
+```
+
+### Basic Paxos (Single-Decree)
+
+**Phase 1: Prepare**
+```
+Proposer: Choose proposal number n, send Prepare(n) to majority
+Acceptor: If n > highest seen: Promise not to accept < n, respond with any accepted value
+```
+
+**Phase 2: Accept**
+```
+Proposer: If majority promised, send Accept(n, v) to majority
+Acceptor: If Prepare(n) was highest promised: Accept (n, v)
+```
+
+**Example:**
+```
+Proposer P1, Acceptors A1, A2, A3 (majority = 2)
+
+Phase 1: P1 -> A1: Prepare(1) -> Promise(1, null)
+         P1 -> A2: Prepare(1) -> Promise(1, null)
+         (Majority promised)
+
+Phase 2: P1 -> A1: Accept(1, "value1") -> Accepted
+         P1 -> A2: Accept(1, "value1") -> Accepted
+         (Majority accepted. "value1" chosen.)
+```
+
+### Multi-Decree Paxos
+
+Optimizes by electing a stable leader. After initial Prepare, all subsequent proposals skip Phase 1.
+
+### Where Paxos Is Used
+
+| System | Usage |
+| --- | --- |
+| **Google Chubby** | Distributed lock service |
+| **Google Spanner** | Cross-shard transactions |
+| **Apache ZooKeeper** | ZAB (Paxos variant) for leader election |
+
+## Raft
+
+Designed by Diego Ongaro (2014) as a more understandable alternative to Paxos. Same guarantees, much easier to understand.
+
+### Three Components
+
+**1. Leader Election:**
+```
+All nodes start as Followers.
+Follower timeout (no heartbeat) -> Becomes Candidate
+Candidate: Votes for self, sends RequestVote to all
+If majority votes -> Becomes Leader
+Leader sends heartbeats to all followers
+```
+
+**Term-based leadership:**
+```
+Term 1: Leader = Node A
+Term 2: Leader = Node B (Node A failed)
+Each term has at most one leader.
+```
+
+**2. Log Replication:**
+```
+Client -> Leader: command
+Leader: Appends to log, sends AppendEntries to followers
+Waits for majority acknowledgment
+Commits entry, applies to state machine
+Responds to client
+```
+
+**Log structure:**
+```
+Index:  1    2    3    4    5
+Term:   1    1    2    2    2
+Entry:  cmd1 cmd2 cmd3 cmd4 cmd5
+              ^
+              last committed (majority replicated)
+```
+
+**3. Raft Safety Properties:**
+- Election Safety: At most one leader per term
+- Leader Append-Only: Leader never overwrites entries
+- Log Matching: Same index+term = identical entries up to that point
+- Leader Committed entries appear in all future leaders
+- State Machine Safety: Committed entries applied consistently
+
+### Raft vs Paxos
+
+| Aspect | Raft | Paxos |
+| --- | --- | --- |
+| **Understandability** | High (designed for it) | Low |
+| **Leader** | Strong leader required | Can work without stable leader |
+| **Used by** | etcd, CockroachDB, TiKV, Consul | Google Chubby, Spanner |
+
+## ZAB (ZooKeeper Atomic Broadcast)
+
+Used by ZooKeeper. Similar to Raft but designed specifically for ZooKeeper's use case (total ordering of operations).
+
+```
+ZAB phases:
+  1. Discovery: New leader discovers latest state from followers
+  2. Synchronization: Leader syncs all followers
+  3. Broadcast: Leader accepts writes and broadcasts
+```
+
+## Algorithm Comparison
+
+| Algorithm | Leader | Complexity | Use Case |
+| --- | --- | --- | --- |
+| **Basic Paxos** | No stable leader | High | Theory, single-value agreement |
+| **Multi-Paxos** | Stable leader | High | Production systems |
+| **Raft** | Strong leader | Medium | General-purpose consensus |
+| **ZAB** | Leader + phases | Medium | ZooKeeper-specific |
+
+## Interview Tips
+
+> "Raft is the practical choice. It is designed for understandability and used by etcd, CockroachDB, and Consul."
+
+> "Consensus algorithms solve: how do you get multiple nodes to agree on one value? The answer is always 'majority quorum' â€” more than half must agree."
+
+---

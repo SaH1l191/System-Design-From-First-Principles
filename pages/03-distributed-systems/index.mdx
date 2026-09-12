@@ -1,0 +1,31 @@
+---
+title: Distributed Systems
+---
+
+# Distributed Systems
+
+> When one machine isn't enough, and you need to coordinate across many.
+
+The hardest problems in backend engineering live here. Consistency, availability, partitions, consensus — these are the concepts that separate junior from senior engineers.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **CAP Theorem** | Why you can't have it all, what it actually means |
+| **PACELC Theorem** | CAP's sequel — the latency/consistency tradeoff even without a partition |
+| **Consistency Models** | Strong, eventual, causal, linearizability |
+| **Consensus Algorithms** | Paxos, Raft, ZAB — how nodes agree |
+| **Distributed Transactions** | 2PC, 3PC, Saga, Outbox, Event Sourcing, CQRS |
+| **Distributed Patterns** | Circuit breaker, bulkhead, retry, timeout, fallback |
+| **Distributed Data Structures** | CRDTs, vector clocks, Lamport timestamps, gossip protocols |
+| **Service Discovery** | Client-side vs server-side, DNS-based, Consul, etcd |
+| **Configuration Management** | Centralized config, feature flags, dynamic reconfiguration, secrets |
+
+---
+
+## Why This Matters
+
+Every distributed system makes tradeoffs between consistency and availability. Understanding *why* — not just memorizing "CP vs AP" — lets you reason about any system architecture you encounter.

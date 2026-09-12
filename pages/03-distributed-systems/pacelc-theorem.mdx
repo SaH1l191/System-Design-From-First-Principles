@@ -1,0 +1,130 @@
+---
+title: PACELC Theorem
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.2 PACELC Theorem
+
+> PACELC extends CAP by addressing what happens during normal operation (no partition). Even without failures, there is a tradeoff between latency and consistency.
+
+## The Gap CAP Theorem Leaves Open
+
+[CAP theorem](/03-distributed-systems/cap-theorem) only tells you what to do **during a network partition** — choose consistency or availability. But partitions are rare; a well-run system might see one every few weeks. The other 99.9%+ of the time, the network is healthy, every node is reachable, and CAP has nothing to say about how the system should behave. Yet a real tradeoff still exists in that "normal" state: **do you wait for all replicas to agree before responding (consistency), or respond immediately from whichever replica you asked (latency)?**
+
+Daniel Abadi proposed PACELC in 2010 specifically to close this gap. It reframes the question as two separate decisions instead of one:
+
+```
+If PARTITION occurs:
+  Choose between Availability and Consistency (same as CAP)
+
+ELSE (normal operation, no partition):
+  Choose between Latency and Consistency
+```
+
+This matters because a system's CAP classification alone doesn't predict its everyday behavior — two "AP" systems can feel completely different in practice if one sacrifices consistency for speed on every single request (not just during partitions) while the other only does so when a partition forces its hand.
+
+## The Full PACELC Framework
+
+Putting the two decisions together gives four possible classifications, since each axis is independent:
+
+```
+                    ┌─────────────────────┐
+                    │  Network partition?  │
+                    └──────────┬──────────┘
+                    YES ◄──────┴──────► NO
+                     │                   │
+              ┌──────┴──────┐    ┌──────┴──────┐
+              │  A  or  C ? │    │  L  or  C ?  │
+              │ (CAP choice)│    │(PACELC's add)│
+              └──────┬──────┘    └──────┬──────┘
+                     │                   │
+              PA ─────┴───── PC   EL ─────┴───── EC
+         (stay available,  (reject/block   (respond fast,   (wait for
+          risk stale data)  until quorum)   risk stale data)  quorum)
+```
+
+Every system lands in one of four boxes — labeled by which choice it makes on each axis:
+
+| Label | Partition | Else | Example |
+| --- | --- | --- | --- |
+| **PA/EL** | Prefer Availability | Prefer Latency | Cassandra, DynamoDB, Riak |
+| **PA/EC** | Prefer Availability | Prefer Consistency | MongoDB (majority writes) |
+| **PC/EL** | Prefer Consistency | Prefer Latency | PNUTS (Yahoo) |
+| **PC/EC** | Prefer Consistency | Prefer Consistency | HBase, etcd, ZooKeeper |
+
+## Why Latency and Consistency Are Opposed
+
+```
+Weak consistency (low latency):
+  Client -> Node A -> Write succeeds immediately (1ms)
+
+Strong consistency (higher latency):
+  Client -> Node A -> Write to local disk
+                  -> Send to Node B -> Wait for ack
+                  -> Send to Node C -> Wait for ack
+                  -> Return success (5-20ms)
+```
+
+## PA/EL Systems (Most Common)
+
+**Cassandra:** Write W=1 (1ms latency, weak consistency). Later: background repair ensures convergence.
+
+**DynamoDB:** Write eventually consistent (~4ms). Strongly consistent reads available but add ~5-10ms.
+
+## PC/EC Systems (When Correctness Matters)
+
+**ZooKeeper:** Writes must be acknowledged by majority (~5-10ms). Always consistent. During partition: rejects writes if majority unavailable.
+
+<Callout type="info">
+**Spanner is the interesting edge case.** It's classified PC/EC — every write goes through Paxos consensus and Spanner offers external (linearizable) consistency globally, which should mean the worst possible latency. But Google engineered around the naive version of this tradeoff using **TrueTime**, a globally-synchronized clock (GPS + atomic clocks in every datacenter) that lets Spanner bound clock uncertainty to a few milliseconds. Instead of a full round-trip coordination protocol for every consistency check, Spanner just waits out the known uncertainty window ("commit wait") before acknowledging. It's still PC/EC — it didn't escape the tradeoff — but it *shrank the cost* of paying it through infrastructure most companies can't replicate. This is the right way to answer a "how would you get Spanner-like consistency" interview question: name the tradeoff, then name what Spanner spent (custom hardware, atomic clocks) to make the tradeoff cheaper, not free.
+</Callout>
+
+## Tunable Consistency in Practice
+
+The PA/EL vs PC/EC classifications above describe a system's *default* behavior, but several databases let you choose the tradeoff **per query**, not just once at the system level:
+
+```
+Cassandra consistency levels (chosen per read/write):
+  ONE      → fastest, only 1 replica must ack        (leans PA/EL)
+  QUORUM   → majority of replicas must ack            (leans PC/EC)
+  ALL      → every replica must ack, no availability   (fully PC/EC)
+```
+
+A single Cassandra cluster can serve a "like count" read at `ONE` (fast, staleness is harmless) and a "current account balance" read at `QUORUM` (slower, but correct) — the classification table below describes a system's *default*, but the honest interview answer is almost always "it depends on the consistency level chosen for that specific query," not a single fixed label.
+
+## Real-World Classification
+
+| System | Partition | Else | Classification |
+| --- | --- | --- | --- |
+| **Cassandra** | A | L | PA/EL |
+| **DynamoDB** (default) | A | L | PA/EL |
+| **Riak** | A | L | PA/EL |
+| **MongoDB** (default) | C | L | PC/EL |
+| **etcd** | C | C | PC/EC |
+| **ZooKeeper** | C | C | PC/EC |
+| **Spanner** | C | C | PC/EC |
+
+## The Latency Reality
+
+```
+Same datacenter, same rack   ~0.1ms
+Same datacenter, diff rack   ~0.5ms
+Same region, diff AZ         ~1-2ms
+Cross-region (US to EU)      ~80-100ms
+Cross-continent              ~150-200ms
+
+Strong consistency penalty: +1-5ms (same DC), +80-200ms (cross-region)
+```
+
+## Interview Tips
+
+> "PACELC goes beyond CAP. Even when the network is healthy, there is a tradeoff between latency and consistency."
+
+> "Tunable consistency lets you make PA/EL vs PC/EC choices per-query, not per-system."
+
+> "If asked 'is DynamoDB CP or AP,' the sharper answer is the full PACELC label: PA/EL by default, but it exposes a tunable knob (`ConsistentRead=true`) that trades some latency for strong reads on a per-request basis — so even 'AP systems' aren't always making the availability-first choice."
+
+> "Naming PACELC unprompted after discussing CAP is a strong signal — it shows you know the tradeoff space extends beyond failure scenarios into everyday latency budgets, which is what actually dominates most systems' day-to-day behavior."
+
+---

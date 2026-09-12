@@ -1,0 +1,104 @@
+---
+title: Consistency Models
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.3 Consistency Models
+
+> Consistency models define the guarantees a distributed system makes about the ordering and visibility of reads and writes.
+
+## The Consistency Spectrum
+
+```
+Strongest <--------------------------------------> Weakest
+
+Linearizability > Sequential > Causal > Read-Your-Writes > Monotonic > Session > Eventual
+```
+
+## Strong Consistency (Linearizability)
+
+Every read returns the result of the most recent completed write. The system behaves as if there is only a single copy of the data.
+
+```
+T1: Client A writes x = 1 (succeeds)
+T2: Client B reads x
+T3: Client B MUST see x = 1 (not 0)
+```
+
+**Systems:** etcd, ZooKeeper, Google Spanner, CockroachDB, MongoDB (linearizable readConcern)
+
+**Cost:** Write 5-20ms, Read 5-20ms, Cross-region 100-200ms
+
+## Eventual Consistency
+
+If no new writes are made, eventually all replicas will converge to the same value. No guarantee about WHEN.
+
+```
+T1: Client A writes x = 1 (succeeds on Node A)
+T2: Client B reads x from Node B -> sees x = 0 (stale)
+T3: Replication propagates x = 1 to Node B
+T4: Client B reads x -> sees x = 1 (up-to-date)
+```
+
+**Systems:** Cassandra (ONE), DynamoDB (default), Riak, CouchDB
+
+## Causal Consistency
+
+Operations that are causally related are seen in order by all nodes. Concurrent operations may be seen in different orders.
+
+```
+T1: User posts comment (C1)
+T2: User replies to C1 (C2)
+
+Causal consistency: Everyone who sees C2 MUST also see C1
+(Because C2 was caused by C1)
+```
+
+## Read-Your-Writes Consistency
+
+A user always sees their own writes, even if other users might see stale data.
+
+```
+T1: User updates profile name to "Alice"
+T2: User refreshes profile page
+T3: User MUST see "Alice" (their own write)
+Other users might still see "Bob" briefly.
+```
+
+## Monotonic Read Consistency
+
+Once a user reads a value, they will never see an older value in subsequent reads.
+
+```
+Without monotonic reads:
+  T1: Read profile -> "Alice" (new)
+  T2: Read profile -> "Bob" (old from different replica) - WENT BACKWARDS!
+
+With monotonic reads:
+  T1: Read profile -> "Alice"
+  T2: Read profile -> "Alice" or later (never older)
+```
+
+## Session Consistency
+
+Combines read-your-writes + monotonic reads within a single session.
+
+## Comparison
+
+| Model | Guarantee | Latency | Use Case |
+| --- | --- | --- | --- |
+| **Linearizability** | Latest write always visible | Highest | Financial, inventory |
+| **Causal** | Cause-effect ordering | Medium | Collaborative editing |
+| **Read-Your-Writes** | User sees own writes | Low-Medium | Profile updates |
+| **Monotonic Reads** | No data going backwards | Low | Feed, timeline |
+| **Session** | Read-your-writes + monotonic | Low | Shopping cart |
+| **Eventual** | All replicas converge | Lowest | Analytics, DNS |
+
+## Interview Tips
+
+> "Linearizability is the gold standard but expensive. Most systems use a mix: linearizable for critical operations, eventual for everything else."
+
+> "Read-your-writes is the most practical model for user-facing applications. Users expect to see their own changes immediately."
+
+---

@@ -1,0 +1,135 @@
+---
+title: CAP Theorem
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.1 CAP Theorem
+
+> The CAP theorem is the foundational theorem of distributed systems. It states that a distributed system can provide at most two of three guarantees: Consistency, Availability, and Partition Tolerance. In practice, since network partitions are inevitable, you must choose between consistency and availability.
+
+## What is the CAP Theorem?
+
+Proposed by Eric Brewer in 2000 and proven by Gilbert and Lynch in 2002, the CAP theorem says a distributed data store can provide at most two of:
+
+### The Three Properties
+
+**Consistency (C):** Every read receives the most recent write or an error. All nodes see the same data at the same time.
+
+```
+Client writes: name = "Alice" to Node A
+
+Without consistency:
+  Node A: name = "Alice" (correct)
+  Node B: name = "Bob"   (stale data)
+  Node C: name = "Alice" (correct)
+
+With consistency:
+  Node A: name = "Alice"
+  Node B: name = "Alice"
+  Node C: name = "Alice"
+  (All nodes agree before acknowledging the write)
+```
+
+**Availability (A):** Every request receives a non-error response, without guaranteeing it contains the most recent write.
+
+```
+With availability:
+  Node B responds with latest known value (no timeout, no error)
+
+Without availability:
+  Node B returns error: "Cannot confirm this is up-to-date"
+```
+
+**Partition Tolerance (P):** The system continues to operate despite network partitions (messages dropped between nodes). In distributed systems, network partitions are a fact of life.
+
+```
+Normal operation:
+  Node A <---> Node B <---> Node C
+
+Network partition:
+  Node A <--X--> Node B <---> Node C
+  A cannot reach B. B cannot reach A.
+```
+
+## Why You Must Choose P
+
+In distributed systems, network partitions are **inevitable**:
+- Cables get physically cut
+- Switches and routers fail
+- NICs drop packets
+- TCP connections timeout
+- Cloud network glitches
+
+Since P is non-negotiable, the real choice is: **CP or AP?**
+
+```
+CP = Consistency + Partition Tolerance (sacrifice availability)
+AP = Availability + Partition Tolerance (sacrifice consistency)
+CA = Not possible in distributed systems (only single-node)
+```
+
+## CP Systems (Consistency over Availability)
+
+During a partition, CP systems reject requests rather than serve stale data.
+
+| System | How it achieves CP |
+| --- | --- |
+| **HBase** | Consistent hashing with leader election |
+| **MongoDB** (default) | Primary-secondary replication with majority writes |
+| **Redis Cluster** | Slot-based sharding, reject writes during partition |
+| **etcd** | Raft consensus (majority quorum required) |
+| **ZooKeeper** | ZAB consensus (majority quorum required) |
+| **Google Bigtable** | Single-leader with tablet replication |
+
+**When to choose CP:** Financial transactions, inventory management, booking systems, any system where stale data causes real harm.
+
+## AP Systems (Availability over Consistency)
+
+During a partition, AP systems serve whatever data they have, even if stale.
+
+| System | How it achieves AP |
+| --- | --- |
+| **Cassandra** | Leaderless replication, tunable consistency |
+| **DynamoDB** | Leaderless replication, eventual consistency |
+| **Riak** | Quorum reads/writes, conflict resolution |
+| **CouchDB** | Multi-master replication |
+| **DNS** | Distributed naming, eventual consistency |
+| **Amazon S3** | Eventually consistent reads (strong for writes) |
+
+**When to choose AP:** Social media feeds, shopping carts, analytics dashboards, DNS, user presence/status.
+
+## CAP in Practice: It Is Not Binary
+
+```
+Strong Consistency <------------------> High Availability
+     (CP)                                (AP)
+
+  etcd/ZK    MongoDB    DynamoDB    Cassandra
+  <----------------------------------------->
+  More CP                       More AP
+```
+
+**Tunable consistency (DynamoDB, Cassandra):**
+
+```
+Cassandra:
+  ConsistencyLevel.ONE   -> Fast, available (AP-leaning)
+  ConsistencyLevel.QUORUM -> Balanced (CP-leaning)
+  ConsistencyLevel.ALL    -> Consistent, less available (CP)
+```
+
+## Common Misconceptions
+
+1. **"CA systems do not exist"** â€” Single-node databases (PostgreSQL, MySQL) are CA. CAP only applies to distributed systems.
+2. **"You must choose CP or AP for the entire system"** â€” You can mix. A payment service can be CP while the product catalog is AP.
+3. **"Consistency means all nodes are always identical"** â€” Consistency in CAP means linearizability â€” a read returns the most recent write.
+4. **"AP means data is always stale"** â€” AP systems can achieve strong consistency for specific operations (quorum reads/writes).
+
+## Interview Tips
+
+> "The CAP theorem forces a choice between consistency and availability during network partitions. In practice, most systems are AP with tunable consistency."
+
+> "The real question is not 'CP or AP?' â€” it is 'What does stale data cost?' If stale data costs money, go CP. If stale data just means slightly old content, go AP."
+
+---

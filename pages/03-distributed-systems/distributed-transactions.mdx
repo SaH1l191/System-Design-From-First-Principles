@@ -1,0 +1,189 @@
+---
+title: Distributed Transactions
+---
+
+import { Callout } from 'nextra/components'
+
+# 3.5 Distributed Transactions
+
+> Distributed transactions coordinate writes across multiple services or databases. Every approach makes tradeoffs between consistency, availability, performance, and complexity.
+
+## Two-Phase Commit (2PC)
+
+The classic distributed transaction protocol. A coordinator manages the transaction.
+
+### Phase 1: Prepare
+```
+Coordinator sends "prepare" to all participants
+Each participant checks if it CAN commit, locks resources, writes to WAL
+Responds YES or NO
+```
+
+### Phase 2: Commit or Abort
+```
+All YES -> Coordinator sends "commit" -> All participants commit
+Any NO  -> Coordinator sends "abort"  -> All participants abort
+```
+
+### Flow
+```
+Time    Coordinator          Participant A      Participant B
+ |            |                    |                  |
+ |  prepare   |-------->|                  |
+ |  prepare   |-------->|-------->|
+ |            |    YES   |                  |
+ |            |<--------|                  |
+ |            |    YES   |                  |
+ |            |<-------------------------|
+ |  commit    |-------->|                  |
+ |  commit    |-------->|-------->|
+ |            | committed|                  |
+ |            |<--------|                  |
+```
+
+### The Blocking Problem
+
+**Critical flaw:** If coordinator crashes after Phase 1 but before Phase 2, all participants are stuck holding locks. They cannot do anything until coordinator recovers.
+
+### 2PC in Practice
+
+| System | Usage |
+| --- | --- |
+| **XA Transactions** | Standard 2PC (MySQL, PostgreSQL, Oracle) |
+| **Google Spanner** | 2PC + Paxos for cross-shard transactions |
+| **CockroachDB** | 2PC + Raft for distributed transactions |
+
+**Use 2PC when:** Strong consistency needed, short transactions, same datacenter, system can tolerate blocking.
+
+## Three-Phase Commit (3PC)
+
+Adds a pre-commit phase to reduce blocking:
+
+```
+Phase 1: CanCommit? (no locks)
+Phase 2: PreCommit (locks acquired)
+Phase 3: DoCommit (committed)
+```
+
+If coordinator crashes after PreCommit, participants can auto-commit. But network partitions can cause inconsistency â€” 3PC is rarely used in production.
+
+## Saga Pattern
+
+Decomposes a distributed transaction into local transactions with compensating transactions (undo operations).
+
+```
+Normal flow:
+  T1: Deduct  from Alice (succeeds)
+  T2: Add  to Bob (FAILS)
+  T3: Never executes
+
+Compensation:
+  C1: Refund  to Alice (undo T1)
+```
+
+### Choreography vs Orchestration
+
+**Choreography (Event-Driven):**
+```
+Service A: Deduct money -> Publishes "MoneyDeducted"
+Service B: Listens, adds money -> Publishes "MoneyAdded"
+Service C: Listens, records transfer
+If B fails -> Publishes "MoneyAddFailed" -> A compensates
+```
+
+**Orchestration:**
+```
+Saga Orchestrator:
+  Step 1: Call Service A
+  Step 2: Call Service B
+  Step 3: Call Service C
+  If Step 2 fails: Execute compensation (refund A)
+```
+
+| Aspect | Choreography | Orchestration |
+| --- | --- | --- |
+| **Coupling** | Low (event-driven) | Medium (orchestrator knows all) |
+| **Complexity** | Distributed (harder to debug) | Centralized (easier to understand) |
+| **Visibility** | Hard to see full flow | Single source of truth |
+
+### Saga vs 2PC
+
+| Aspect | Saga | 2PC |
+| --- | --- | --- |
+| **Locking** | No long-term locks | Holds locks |
+| **Consistency** | Eventual (intermediate states visible) | Strong (all-or-nothing) |
+| **Performance** | Better | Worse |
+| **Use case** | Long-running, cross-service | Short, same-datacenter |
+
+## Transactional Outbox Pattern
+
+Ensures database changes and event publication happen atomically. Solves the dual-write problem.
+
+```
+Without Outbox:
+  1. Write to database (succeeds)
+  2. Publish event to queue (FAILS!)
+  Result: DB has change, event never published
+
+With Outbox:
+  Single transaction:
+    INSERT INTO orders ...
+    INSERT INTO outbox_events ...
+  Both succeed or both fail. Atomic!
+
+Background CDC process reads outbox and publishes to Kafka.
+```
+
+## Event Sourcing
+
+Stores entity state as a sequence of events, not mutable rows.
+
+```
+Traditional:
+  orders: id=123, status="shipped" (mutated)
+
+Event Sourcing:
+  1. OrderCreated {orderId: 123, total: 100}
+  2. OrderPaid {orderId: 123, paymentId: "pay_456"}
+  3. OrderShipped {orderId: 123, trackingId: "track_789"}
+  Current state = replay events 1-3
+```
+
+**Pros:** Complete audit trail, temporal queries, debuggability, event-driven architecture, replay/rebuild.
+
+**Cons:** Complexity, event schema evolution, eventual consistency, storage growth, learning curve.
+
+## CQRS (Command Query Responsibility Segregation)
+
+Separates write model (commands) from read model (queries).
+
+```
+Commands -> Write DB (normalized, ACID)
+              |
+         Event Bus
+              |
+Queries  <- Read DB (denormalized, optimized for reads)
+```
+
+**When to use:** Read:write ratio &gt; 10:1, complex queries with many JOINs, different teams for reads/writes.
+
+## Summary
+
+| Pattern | Consistency | Performance | Complexity | Use Case |
+| --- | --- | --- | --- | --- |
+| **2PC** | Strong | Low (blocking) | Medium | Short cross-service |
+| **3PC** | Strong | Medium | High | Rarely used |
+| **Saga** | Eventual | High | High | Long-running, cross-service |
+| **Outbox** | Eventual | High | Medium | DB + event consistency |
+| **Event Sourcing** | Eventual | High | Very High | Audit trail, temporal |
+| **CQRS** | Eventual | Very High | High | Read-heavy, complex queries |
+
+## Interview Tips
+
+> "2PC is the textbook answer but rarely used in practice due to blocking. Saga is the production choice for most distributed transactions."
+
+> "The Outbox pattern solves the dual-write problem: write to DB + publish event in one atomic transaction. Use CDC to read the outbox."
+
+> "CQRS separates read and write models. Event Sourcing stores events instead of state. They work well together but are independent concepts."
+
+---
