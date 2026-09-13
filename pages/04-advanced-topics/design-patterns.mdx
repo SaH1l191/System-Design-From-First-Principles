@@ -1,0 +1,360 @@
+---
+title: Design Patterns
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.7 Design Patterns
+
+> Design patterns are reusable solutions to common problems in software design. They are not finished code but templates for solving recurring issues. In system design interviews, knowing patterns helps you communicate solutions clearly.
+
+## Creational Patterns
+
+### Singleton Pattern
+
+```
+Purpose: Ensure only one instance of a class exists
+
+When to use:
+  - Database connection pool
+  - Configuration manager
+  - Logger
+  - Cache manager
+
+Example:
+  class DatabasePool:
+      _instance = None
+      
+      def __new__(cls):
+          if cls._instance is None:
+              cls._instance = super().__new__(cls)
+          return cls._instance
+
+  pool1 = DatabasePool()
+  pool2 = DatabasePool()
+  pool1 is pool2  # True (same instance)
+```
+
+### Factory Pattern
+
+```
+Purpose: Create objects without specifying exact class
+
+When to use:
+  - Creating different notification types (email, SMS, push)
+  - Creating different payment processors
+  - Creating different storage backends
+
+Example:
+  class NotificationFactory:
+      @staticmethod
+      def create(type):
+          if type == "email":
+              return EmailNotification()
+          elif type == "sms":
+              return SMSNotification()
+          elif type == "push":
+              return PushNotification()
+
+  notification = NotificationFactory.create("email")
+  notification.send("Hello!")
+```
+
+### Builder Pattern
+
+```
+Purpose: Construct complex objects step by step
+
+When to use:
+  - Building HTTP requests with many optional parameters
+  - Building database queries
+  - Building configuration objects
+
+Example:
+  request = (HttpRequestBuilder()
+      .set_url("https://api.example.com")
+      .set_method("POST")
+      .add_header("Authorization", "Bearer token")
+      .add_body({"key": "value"})
+      .set_timeout(30)
+      .build())
+```
+
+## Structural Patterns
+
+### Adapter Pattern
+
+```
+Purpose: Convert one interface to another
+
+When to use:
+  - Integrating with third-party APIs
+  - Wrapping legacy systems
+  - Making incompatible interfaces work together
+
+Example:
+  # Third-party payment API
+  class StripePayment:
+      def charge(self, amount_cents, currency):
+          # Stripe API
+          pass
+
+  # Your interface expects
+  class PaymentAdapter:
+      def __init__(self, stripe):
+          self.stripe = stripe
+      
+      def process_payment(self, amount, currency):
+          # Adapt your interface to Stripe's
+          self.stripe.charge(int(amount * 100), currency)
+```
+
+### Facade Pattern
+
+```
+Purpose: Provide simplified interface to complex subsystem
+
+When to use:
+  - Simplifying complex library usage
+  - Providing unified interface to multiple services
+  - Hiding internal complexity
+
+Example:
+  class OrderFacade:
+      def __init__(self):
+          self.inventory = InventoryService()
+          self.payment = PaymentService()
+          self.shipping = ShippingService()
+          self.notification = NotificationService()
+      
+      def place_order(self, order):
+          self.inventory.reserve(order)
+          self.payment.charge(order)
+          self.shipping.schedule(order)
+          self.notification.send_confirmation(order)
+```
+
+### Proxy Pattern
+
+```
+Purpose: Control access to another object
+
+When to use:
+  - Caching (Cache Proxy)
+  - Access control (Protection Proxy)
+  - Lazy initialization (Virtual Proxy)
+  - Logging (Logging Proxy)
+
+Example:
+  class CachingProxy:
+      def __init__(self, service):
+          self.service = service
+          self.cache = {}
+      
+      def get(self, key):
+          if key in self.cache:
+              return self.cache[key]
+          result = self.service.get(key)
+          self.cache[key] = result
+          return result
+```
+
+## Behavioral Patterns
+
+### Observer Pattern
+
+```
+Purpose: Notify dependents when object state changes
+
+When to use:
+  - Event systems
+  - UI data binding
+  - Pub/Sub systems
+  - Reactive programming
+
+Example:
+  class EventEmitter:
+      def __init__(self):
+          self.listeners = {}
+      
+      def on(self, event, callback):
+          if event not in self.listeners:
+              self.listeners[event] = []
+          self.listeners[event].append(callback)
+      
+      def emit(self, event, data):
+          for callback in self.listeners.get(event, []):
+              callback(data)
+
+  emitter = EventEmitter()
+  emitter.on("order_created", send_confirmation_email)
+  emitter.on("order_created", update_inventory)
+  emitter.emit("order_created", order_data)
+```
+
+### Strategy Pattern
+
+```
+Purpose: Define a family of algorithms, make them interchangeable
+
+When to use:
+  - Different sorting algorithms
+  - Different pricing strategies
+  - Different authentication methods
+  - Different compression algorithms
+
+Example:
+  class PricingStrategy:
+      def calculate(self, order):
+          raise NotImplementedError
+
+  class RegularPricing(PricingStrategy):
+      def calculate(self, order):
+          return order.total
+
+  class PremiumPricing(PricingStrategy):
+      def calculate(self, order):
+          return order.total * 0.9  # 10% discount
+
+  class SalePricing(PricingStrategy):
+      def calculate(self, order):
+          return order.total * 0.7  # 30% discount
+
+  # Client code
+  def checkout(order, strategy):
+      total = strategy.calculate(order)
+      charge(order.customer, total)
+```
+
+### Command Pattern
+
+```
+Purpose: Encapsulate requests as objects
+
+When to use:
+  - Undo/redo functionality
+  - Queuing requests
+  - Logging operations
+  - Transaction support
+
+Example:
+  class Command:
+      def execute(self):
+          raise NotImplementedError
+      def undo(self):
+          raise NotImplementedError
+
+  class CreateOrderCommand(Command):
+      def __init__(self, order_service, order_data):
+          self.order_service = order_service
+          self.order_data = order_data
+          self.created_order = None
+      
+      def execute(self):
+          self.created_order = self.order_service.create(self.order_data)
+      
+      def undo(self):
+          self.order_service.delete(self.created_order.id)
+
+  # Command queue
+  commands = []
+  commands.append(CreateOrderCommand(order_service, data))
+  
+  # Execute all
+  for cmd in commands:
+      cmd.execute()
+  
+  # Undo all (if needed)
+  for cmd in reversed(commands):
+      cmd.undo()
+```
+
+## Saga Pattern (Architecture-Level)
+
+```
+Purpose: Manage distributed transactions with compensating actions
+
+Already covered in Section 5.4 (Event-Driven Microservices)
+Key point: Saga is both a design pattern AND an architecture pattern
+```
+
+## Circuit Breaker Pattern
+
+```
+Purpose: Prevent cascading failures by stopping calls to failing services
+
+Already covered in Section 3.6 (Distributed Systems Patterns)
+Key point: Circuit breaker is essential for every inter-service call
+```
+
+## API Gateway Pattern
+
+```
+Purpose: Single entry point for all client requests
+
+Already covered in Section 1.1 (APIs - API Gateway)
+Key point: API Gateway handles routing, auth, rate limiting
+```
+
+## Backend for Frontend (BFF)
+
+```
+Purpose: Create separate backend services for different frontend clients
+
+Problem:
+  Mobile app needs: Small payloads, optimized for battery
+  Web app needs: Full payloads, rich data
+  Smart TV app needs: Large images, minimal data
+
+Solution:
+  ┌──────────┐
+  │ Mobile   │──→ Mobile BFF ──→ Microservices
+  │ App      │    (optimized for mobile)
+  └──────────┘
+  
+  ┌──────────┐
+  │ Web      │──→ Web BFF ──→ Microservices
+  │ App      │    (optimized for web)
+  └──────────┘
+  
+  ┌──────────┐
+  │ Smart TV │──→ TV BFF ──→ Microservices
+  │ App      │    (optimized for TV)
+  └──────────┘
+```
+
+### BFF Benefits
+
+| Aspect | Without BFF | With BFF |
+| --- | --- | --- |
+| **API design** | One API tries to serve all | Each client gets optimized API |
+| **Payload size** | Large (includes all fields) | Small (only needed fields) |
+| **Performance** | Slow for mobile | Fast per client |
+| **Team structure** | Backend team owns API | Frontend teams own their BFF |
+
+## Pattern Selection Guide
+
+| Problem | Pattern | When to Use |
+| --- | --- | --- |
+| Only one instance allowed | Singleton | Database pool, config manager |
+| Create different object types | Factory | Notifications, payment processors |
+| Build complex objects | Builder | HTTP requests, queries |
+| Interface incompatibility | Adapter | Third-party API integration |
+| Simplify complex system | Facade | Unified API for multiple services |
+| Control object access | Proxy | Caching, access control, logging |
+| State change notifications | Observer | Event systems, pub/sub |
+| Multiple algorithms | Strategy | Pricing, authentication, sorting |
+| Request as object | Command | Undo/redo, queuing, logging |
+| Distributed transactions | Saga | Cross-service transactions |
+| Cascading failures | Circuit Breaker | Every inter-service call |
+| Multiple client types | BFF | Mobile + Web + TV |
+
+## Interview Tips
+
+> "Design patterns are templates, not finished code. Know the problem each pattern solves, not just the implementation."
+
+> "Creational patterns control object creation. Structural patterns compose objects. Behavioral patterns define object communication."
+
+> "In system design interviews, the most important patterns are: Circuit Breaker, Saga, API Gateway, BFF, and Strategy. Know them well."
+
+---

@@ -1,0 +1,25 @@
+---
+title: Advanced Topics
+---
+
+# Advanced Topics
+
+> The specialized machinery that powers complex backend systems.
+
+Message queues, event-driven architecture, and the design patterns that hold it all together.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **Message Queues** | Kafka, RabbitMQ, SQS, BullMQ, DLQ, backpressure, saga, outbox pattern |
+| **Event Sourcing & CQRS** | Command/query separation, event stores, projections, when (not) to use it |
+| **Design Patterns** | Creational, structural, behavioral, saga, circuit breaker |
+
+---
+
+## Why These Are Grouped Together
+
+Message queues, event sourcing, and the classic design patterns share a common thread: they're the specialized machinery you reach for once the basics (a database, a cache, a load balancer) aren't enough on their own — decoupling producers from consumers, making writes and reads independently scalable, and giving recurring structural problems a name everyone on the team already understands.

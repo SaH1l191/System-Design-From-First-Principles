@@ -1,0 +1,1149 @@
+---
+title: Event Sourcing & CQRS Deep Dive
+---
+
+import { Callout } from 'nextra/components'
+
+# 1. The Problem CQRS Tries to Solve
+
+Imagine a normal e-commerce application.
+
+You have an `orders` table:
+
+```
+Orders
+-------
+id
+customer_id
+status
+total_amount
+created_at
+```
+
+Your application does:
+
+### Writes
+
+```
+Create Order
+Cancel Order
+Update Address
+Mark Shipped
+```
+
+### Reads
+
+```
+Show Order History
+Show Dashboard
+Show Top Selling Products
+Show Monthly Revenue
+Search Orders
+```
+
+In a typical CRUD application:
+
+```
+API
+ ↓
+Database
+ ↓
+Same tables for reads and writes
+```
+
+Everything uses the same data model.
+
+---
+
+# 2. Why This Becomes a Problem
+
+The needs of reads and writes are often very different.
+
+## Write Example
+
+When placing an order:
+
+```
+Customer clicks Buy
+```
+
+You care about:
+
+```
+Validation
+Business rules
+Transactions
+Consistency
+```
+
+Example:
+
+```
+Is inventory available?
+Is payment valid?
+```
+
+You don't care about reporting.
+
+---
+
+## Read Example
+
+For dashboard:
+
+```
+Show:
+- Revenue this month
+- Orders by state
+- Top 10 products
+- Average order value
+```
+
+These queries may require:
+
+```
+JOIN
+GROUP BY
+Aggregations
+```
+
+Very different from writes.
+
+---
+
+# Without CQRS
+
+```
+Orders Table
+     ↑
+     │
+ Reads + Writes
+```
+
+One model is trying to satisfy both.
+
+This becomes difficult at scale.
+
+# 3. CQRS Idea
+
+CQRS says:
+
+> Stop using the same model for reading and writing.
+
+Separate them.
+
+```
+       Commands
+           │
+           ▼
+      Write Model
+           │
+           ▼
+      Events/Data
+           │
+           ▼
+      Read Model
+           ▲
+           │
+        Queries
+```
+
+---
+
+# 4. What is a Command?
+
+A command means:
+
+> Please do something.
+
+Examples:
+
+```
+PlaceOrder
+CancelOrder
+ShipOrder
+UpdateCustomerAddress
+```
+
+Commands are intentions.
+
+Not:
+
+```
+OrderCreated
+```
+
+That's an event.
+
+---
+
+Example:
+
+```
+{
+  "command": "PlaceOrder",
+  "customerId": 123,
+  "items": [...]
+}
+```
+
+---
+
+# 5. What is an Event?
+
+Event means:
+
+> Something already happened.
+
+Examples:
+
+```
+OrderCreated
+OrderCancelled
+PaymentReceived
+ItemAddedToCart
+```
+
+Past tense.
+
+Example:
+
+```
+{
+  "event": "OrderCreated",
+  "orderId": 5001
+}
+```
+
+---
+
+# 6. CQRS Write Side
+
+Suppose customer places order.
+
+### Step 1
+
+Command arrives.
+
+```
+PlaceOrder
+```
+
+### Step 2
+
+Write model validates.
+
+```
+Inventory?
+Payment?
+Customer active?
+```
+
+### Step 3
+
+If valid:
+
+```
+OrderCreated Event
+```
+
+Generated.
+
+---
+
+Flow:
+
+```
+User
+ ↓
+PlaceOrder Command
+ ↓
+Write Model
+ ↓
+OrderCreated Event
+```
+
+---
+
+# 7. Event Store
+
+Instead of saving final state:
+
+```
+Order #5001 = Shipped
+```
+
+Some CQRS systems store all events.
+
+```
+OrderCreated
+PaymentReceived
+OrderPacked
+OrderShipped
+```
+
+This is called:
+
+```
+Event Store
+```
+
+Example:
+
+```
+1. OrderCreated
+2. PaymentReceived
+3. OrderPacked
+4. OrderShipped
+```
+
+Entire history preserved.
+
+---
+
+# 8. What is a Projection?
+
+A projection converts events into a read model.
+
+Suppose event occurs:
+
+```
+OrderCreated
+```
+
+Projection listens.
+
+```
+OrderCreated
+      ↓
+Projection
+      ↓
+Orders_Read_Table
+```
+
+Think:
+
+```
+Events → Database View
+```
+
+---
+
+# 9. Read Model
+
+Instead of querying events directly:
+
+Create optimized tables.
+
+Example:
+
+```
+OrderSummary
+------------
+order_id
+customer_name
+status
+total
+```
+
+This table exists only for reads.
+
+---
+
+Another table:
+
+```
+RevenueByMonth
+--------------
+month
+revenue
+```
+
+---
+
+Another:
+
+```
+TopProducts
+-----------
+product_id
+sales_count
+```
+
+---
+
+Notice:
+
+One write model.
+
+Many read models.
+
+---
+
+# Real Example
+
+Imagine Amazon.
+
+---
+
+## Write Side
+
+Customer buys laptop.
+
+Command:
+
+```
+PlaceOrder
+```
+
+Validation:
+
+```
+Inventory exists
+Payment valid
+Address valid
+```
+
+Generate:
+
+```
+OrderCreated
+```
+
+Store event.
+
+---
+
+## Projection 1
+
+Updates:
+
+```
+Customer Order History
+```
+
+Table:
+
+```
+CustomerOrders
+```
+
+---
+
+## Projection 2
+
+Updates:
+
+```
+Revenue Dashboard
+```
+
+Table:
+
+```
+RevenueMetrics
+```
+
+---
+
+## Projection 3
+
+Updates:
+
+```
+Top Products
+```
+
+Table:
+
+```
+ProductSales
+```
+
+---
+
+One event:
+
+```
+OrderCreated
+```
+
+feeds multiple read models.
+
+---
+
+# 10. Why CQRS Scales Well
+
+Traditional:
+
+```
+Single DB
+Reads + Writes
+```
+
+Large traffic:
+
+```
+100 writes/sec
+10000 reads/sec
+```
+
+Reads overwhelm database.
+
+---
+
+CQRS:
+
+```
+Write DB
+     │
+ Events
+     │
+Read DBs
+```
+
+Can scale independently.
+
+```
+Write DB → 1 instance
+
+Read DB → 20 replicas
+```
+
+Huge benefit.
+
+---
+
+# 11. Eventual Consistency
+
+Most important CQRS concept.
+
+Suppose:
+
+```
+OrderCreated Event
+```
+
+generated.
+
+Projection takes:
+
+```
+100ms
+```
+
+to update read model.
+
+During that 100ms:
+
+```
+Read model may not show order.
+```
+
+This is called:
+
+```
+Eventual Consistency
+```
+
+Data becomes correct shortly.
+
+Not immediately.
+
+---
+
+Traditional DB:
+
+```
+Strong consistency
+```
+
+CQRS:
+
+```
+Eventual consistency
+```
+
+often.
+
+---
+
+# 12. CQRS + Kafka
+
+Very common.
+
+```
+PlaceOrder Command
+       ↓
+Order Service
+       ↓
+OrderCreated Event
+       ↓
+Kafka Topic
+       ↓
+Projections
+```
+
+Consumers:
+
+```
+Order Read Model
+Analytics Read Model
+Revenue Read Model
+Search Index
+```
+
+All update independently.
+
+---
+
+# 13. CQRS + Event Sourcing
+
+People confuse these.
+
+They are different.
+
+### CQRS
+
+Separates:
+
+```
+Read Model
+Write Model
+```
+
+---
+
+### Event Sourcing
+
+Stores:
+
+```
+Events
+```
+
+instead of current state.
+
+---
+
+You can have:
+
+```
+CQRS without Event Sourcing
+```
+
+or
+
+```
+Event Sourcing without CQRS
+```
+
+though they are often used together.
+
+---
+
+# Example: CQRS Without Event Sourcing
+
+Write side:
+
+```
+Orders
+```
+
+Read side:
+
+```
+OrderSummary
+RevenueTable
+```
+
+No event store.
+
+Just separate databases.
+
+Still CQRS.
+
+---
+
+# 14. When NOT to Use CQRS
+
+Suppose you're building:
+
+```
+Blog website
+Portfolio site
+Admin panel
+Small CRM
+Simple inventory system
+```
+
+CRUD is enough.
+
+Using CQRS would create:
+
+```
+Commands
+Events
+Projections
+Read Models
+Message Broker
+Eventual Consistency
+```
+
+for no benefit.
+
+---
+
+# 15. When CQRS Makes Sense
+
+CQRS shines when:
+
+### Complex Domain
+
+```
+Banking
+Trading
+Insurance
+ERP
+Supply Chain
+```
+
+---
+
+### Huge Read Traffic
+
+```
+1000 writes/sec
+100000 reads/sec
+```
+
+---
+
+### Many Read Views
+
+Same data needs:
+
+```
+Dashboard
+Reports
+Search
+Analytics
+Mobile App
+Admin Portal
+```
+
+---
+
+### Event-Driven Systems
+
+Using:
+
+- Apache Kafka
+- Event buses
+- Microservices
+
+---
+
+# Mental Model
+
+Think of CQRS as:
+
+```
+Traditional CRUD
+
+         Database
+        /        \
+      Read      Write
+```
+
+vs
+
+```
+CQRS
+
+Commands
+    ↓
+Write Model
+    ↓
+Events
+    ↓
+Projections
+    ↓
+Read Models
+
+Queries
+    ↓
+Read Models
+```
+
+The key idea is:
+
+> The best structure for writing data is usually not the best structure for reading data. CQRS embraces that by building separate models optimized for each purpose
+
+---
+
+## 19. Anti-Pattern: Using Databases as Message Queues
+
+### The Anti-Pattern
+
+Using a database table as a message queue: services write rows, other services poll for new rows.
+
+```
+Service A → INSERT INTO messages (payload, target) VALUES ('...', 'ServiceB')
+Service B → SELECT * FROM messages WHERE target='ServiceB' AND processed=false
+           → process message
+           → UPDATE messages SET processed=true WHERE id=123
+```
+
+### Why This Is Bad
+
+1. **Polling overhead**: Frequent polling = lots of read operations on the database
+2. **Long intervals = bad UX**: If you poll every 50 seconds, a message that should arrive in 2 seconds takes 50 seconds
+3. **Database not optimized for both reads and writes**: Locking, deadlocks, performance degradation
+4. **Data cleanup**: Messages accumulate, need manual deletion or cron jobs
+5. **Scalability**: Adding more services → more polling → database can't handle the load
+
+### When It's Actually OK
+
+- Small system with few messages
+- Low frequency of messages
+- Simple architecture where adding a message broker is overkill
+- Small team that doesn't want to learn a new technology
+
+### The Rule
+
+> If you're asked in an interview, don't start with a database as a queue without asking about scale. 90% of the time, the interviewer wants you to use a proper message queue.
+
+---
+
+## 20. When to Use a Queue — The 4 Signals
+
+### Signal 1: Async Work
+
+The user doesn't need an immediate result.
+
+```
+Litmus test: "Does the user need the result of this operation RIGHT NOW?"
+  No → Queue it
+  Yes → Don't queue it (do it synchronously)
+```
+
+**Examples:**
+
+- Sending emails ✅ (user doesn't need to wait)
+- Generating reports ✅ (can take minutes)
+- Processing uploads ✅ (resize in background)
+- User authentication ❌ (user needs immediate response)
+- Payment processing ❌ (user needs immediate confirmation)
+
+### Signal 2: Bursty Traffic
+
+You need to absorb traffic spikes without dropping requests.
+
+```
+Normal: 50 orders/second
+Flash sale: 5,000 orders/second
+Your servers: handle 200/second
+
+Without queue: 4,800 requests fail
+With queue: queue absorbs 4,800, consumers process gradually
+```
+
+### Signal 3: Decoupling
+
+Producer and consumer have different scaling or hardware needs.
+
+```
+Upload service: lightweight, just accepts files
+Processing workers: need GPUs, lots of memory
+
+Without queue: forced to run expensive GPU instances for uploads
+With queue: scale upload servers and processing workers independently
+```
+
+### Signal 4: Reliability
+
+You can't afford to lose work.
+
+```
+Downstream service temporarily unavailable?
+  Without queue: requests fail, work is lost
+  With queue: messages wait until service recovers
+```
+
+---
+
+## 21. When NOT to Use a Queue
+
+### Synchronous Workloads with Low Latency Requirements
+
+```
+If your non-functional requirement is: "Response time < 500ms"
+And you add a queue: You've guaranteed breaking that constraint
+
+Queues add latency (even if it's milliseconds)
+Queues add complexity (how do you get the result back to the client?)
+```
+
+### When You Need Immediate, Deterministic Results
+
+- User authentication
+- Payment confirmation
+- Real-time search results
+- Chat messages
+
+### When the System is Simple
+
+If you have 2 services and 10 messages per minute, a queue adds unnecessary complexity. A direct HTTP call is fine.
+
+### The Rule
+
+> Queues are for work you can afford to do later, even if "later" is a few seconds from now. If you need an answer right now, don't use a queue.
+
+---
+
+## 22. Monitoring & Observability
+
+### Key Metrics to Monitor
+
+| Metric | What It Tells You | Alert When |
+| --- | --- | --- |
+| **Queue depth** | How many messages waiting | Growing continuously |
+| **Consumer lag** | How far behind consumers are | Exceeds threshold for 5+ minutes |
+| **Publish rate** | Messages produced per second | Spike indicates traffic surge |
+| **Consume rate** | Messages consumed per second | Below publish rate |
+| **DLQ depth** | Failed messages accumulating | Any growth (indicates bug) |
+| **Consumer count** | Active consumers | Drops to zero |
+| **Processing time** | How long each message takes | p99 increasing |
+| **Redelivery rate** | How often messages are retried | High rate indicates consumer issues |
+
+### RabbitMQ-Specific Metrics
+
+- **Ready messages**: Messages waiting to be consumed (high = consumers too slow)
+- **Unacknowledged messages**: Messages delivered but not ACK'd (high = consumers stuck)
+- **Memory usage**: If too high, RabbitMQ blocks all producers
+- **Connection count**: Active connections
+
+### Kafka-Specific Metrics
+
+- **Consumer lag per partition**: Most important metric
+- **Under-replicated partitions**: Indicates broker issues
+- **ISR (In-Sync Replicas) shrink**: Data loss risk
+- **Log size**: Disk usage per partition
+
+### Monitoring Best Practices
+
+1. **Alert on trends, not thresholds**: A queue at 50K messages may be normal or critical — depends on your workload
+2. **Use** `predict_linear()`: Predict when disk will be full, when queue will overflow
+3. **Monitor both infrastructure and application**: Broker health + consumer processing time
+4. **DLQ monitoring is critical**: DLQ growth = bug in production
+5. **Dashboard per team/service**: Each team should see their own queues
+
+---
+
+## 23. Interview Playbook — What to Say and When
+
+### When Asked "Design a Notification System"
+
+```
+1. "I'd use a message queue to decouple the notification trigger from the actual sending"
+2. "Producers publish events like UserSignedUp, OrderPlaced"
+3. "Consumer workers pick up events and send emails, SMS, push notifications"
+4. "I'd use at-least-once delivery with idempotent consumers"
+5. "Dead letter queue for failed notifications"
+6. "Scale consumers independently based on queue depth"
+```
+
+### When Asked "Kafka or RabbitMQ?"
+
+```
+If the workload is task-oriented (send email, process payment):
+  → "RabbitMQ. It's simpler, has built-in DLQ, and works well for task queues."
+
+If the workload is event-streaming (analytics, replay, multiple consumers):
+  → "Kafka. Messages persist, multiple consumer groups can read independently, and I can replay events."
+
+If unsure:
+  → "I'd default to Kafka for its versatility. If the interviewer pushes for simpler: RabbitMQ."
+```
+
+### When Asked About Delivery Guarantees
+
+```
+"I'd use at-least-once delivery. It guarantees no data loss while being practical.
+My consumers would be idempotent — processing the same message twice produces the same result.
+I'd use idempotency keys in each message to track what's been processed.
+Exactly-once is theoretically possible in Kafka but only within Kafka-to-Kafka,
+so I don't rely on it for external systems."
+```
+
+### When Asked About Ordering
+
+```
+"I need per-entity ordering, not global ordering.
+I'd use user_id or order_id as the partition key.
+This ensures all events for the same user/order go to the same partition and are processed in order.
+I don't need global ordering across all users — that would kill parallelism."
+```
+
+### When Asked About Failure Scenarios
+
+```
+"If a message fails:
+  1. Retry with exponential backoff (3-10 times)
+  2. If still failing, move to Dead Letter Queue
+  3. Monitor DLQ depth with alerts
+  4. Engineer investigates, fixes the bug
+  5. Replay messages from DLQ
+
+If the queue goes down:
+  Messages persist on disk (Kafka) or in database (outbox pattern)
+  Consumers reconnect and pick up where they left off
+  No data loss."
+```
+
+### When Asked About Backpressure
+
+```
+"A queue is a buffer, not a solution to insufficient capacity.
+If producers outpace consumers:
+  1. Auto-scale consumers based on queue depth
+  2. If that's not enough, apply backpressure to producers (return 429 errors)
+  3. Set alerts on queue depth and growth rate
+  4. The queue buys time, but eventually you need to scale consumers."
+```
+
+### The Senior-Level Statement
+
+```
+"I'd implement the transactional outbox pattern.
+Business data and events are saved in the same DB transaction.
+A background worker polls the outbox and publishes to the queue.
+This guarantees that business state and event state never diverge.
+If the queue is down, events wait safely in the database.
+This solves the dual-write problem."
+```
+
+---
+
+## 24. Real-World Companies & Their Choices
+
+| Company | Queue | Use Case |
+| --- | --- | --- |
+| Netflix | Kafka | Petabytes daily for recommendations and billing |
+| Uber | Kafka | Real-time pricing and fraud detection |
+| LinkedIn | Kafka | Feed, messaging (invented Kafka) |
+| Instagram | RabbitMQ | Photo upload processing (resize, filter) |
+| Reddit | RabbitMQ | Comment threads, karma calculations |
+| Robinhood | RabbitMQ | Task queues for financial operations |
+| Twitter | Pub/Sub | Tweet distribution to followers |
+| Most startups | BullMQ/SQS | Background jobs, simple async |
+
+### The Common Pattern
+
+Many companies use **both** Kafka and RabbitMQ:
+
+- **Kafka** as the durable event backbone (streaming, analytics, replay)
+- **RabbitMQ** as the task queue (background jobs triggered by events)
+
+```
+OrderPlaced event in Kafka
+  ↓
+  ├── Analytics Service (reads from Kafka)
+  ├── Fraud Detection (reads from Kafka)
+  ├── Billing Service (reads from Kafka)
+  │
+  └── RabbitMQ job: send email
+  └── RabbitMQ job: generate invoice
+  └── RabbitMQ job: update inventory
+```
+
+---
+
+## 25. Complete Comparison Table
+
+| Feature          | Kafka                     | RabbitMQ             | SQS                   | BullMQ                  |
+| ---------------- | ------------------------- | -------------------- | --------------------- | ----------------------- |
+| **Type**         | Distributed log           | Message broker       | Managed queue         | Redis job queue         |
+| **Built on**     | Scala/Java (JVM)          | Erlang               | AWS managed           | Redis                   |
+| **Protocol**     | Custom binary             | AMQP, MQTT, STOMP    | AWS SDK               | Redis protocol          |
+| **Throughput**   | Millions/sec              | 10K-100K/sec         | Unlimited (Std)       | Depends on Redis        |
+| **Latency**      | 5-50ms                    | Sub-ms possible      | Medium                | Low                     |
+| **Ordering**     | Per partition             | Per queue            | Best-effort/FIFO      | Redis semantics         |
+| **Retention**    | Days/weeks/forever        | Until consumed       | Up to 14 days         | Redis persistence       |
+| **Replay**       | Yes                       | No                   | No                    | No                      |
+| **DLQ**          | Build yourself            | Built-in             | Built-in              | Built-in                |
+| **Delivery**     | At-least/exactly-once     | At-least-once        | At-least/exactly-once | At-least-once           |
+| **Routing**      | Partition key             | Exchanges (4 types)  | Queue-level           | Manual                  |
+| **Complexity**   | High                      | Medium               | Low                   | Low                     |
+| **Best for**     | Event streaming, replay   | Task queues, routing | AWS-native, zero ops  | Node.js background jobs |
+| **Weakness**     | Overkill for simple tasks | Lower throughput     | AWS lock-in           | No enterprise features  |
+| **Ops overhead** | High (self-hosted)        | Medium               | None                  | Low                     |
+
+---
+
+## 26. Sources & Further Reading
+
+### Primary Sources Used
+
+ 1. **Hello Interview** — "Message Queues in System Design Interviews w/ Meta Staff Engineer" (Evan, 2026)
+ 2. **Nerding I/O** — "Kafka vs RabbitMQ — When to use each?" (2026)
+ 3. **Codelit.io** — "Message Queue Architecture: The Complete Guide to Async Communication" (2026)
+ 4. **System Design Handbook** — "Message Queue System Design: Step-by-Step Guide" (2025)
+ 5. **System Design Sandbox** — "Message Queues" (2026)
+ 6. **Kemal Codes** — "System Design #7: Message Queues — Kafka, RabbitMQ, SQS" (2026)
+ 7. **Wasil Zafar** — "System Design Series Part 7: Message Queues & Event-Driven" (2026)
+ 8. **techinterview.org** — "System Design Interview: Design a Distributed Message Queue" (2026)
+ 9. **DEV Community** — "System Design - 13. Message Queues Explained" (2026)
+10. **RabbitMQ Official Documentation** — rabbitmq.com
+11. **Confluent Kafka Documentation** — kafka.apache.org
+
+### Additional Sources
+
+12. **Abstract Algorithms** — "System Design Message Queues and Event-Driven Architecture" (2026)
+13. **Sujeet Jaiswal** — "Queues and Pub/Sub: Decoupling and Backpressure" (2026)
+14. **Digital Applied** — "Event-Driven Architecture & Message Queues: 2026 Reference" (2026)
+15. **OneUptime** — "How to Build Queue Architecture Design" (2026)
+16. **SWE Helper** — "Message Queues: Decoupling Systems for Scale and Reliability" (2025)
+17. **DevToolbox** — "RabbitMQ Complete Guide: Message Queues, Exchanges & Patterns" (2026)
+18. **tutorialQ** — "Message Queue Patterns: Choosing the Right Messaging System" (2026)
+19. **MatterAI** — "Message Queue Patterns: P2P, Pub/Sub, and Request-Reply Explained" (2026)
+20. **Amirul Islam** — "Kafka vs RabbitMQ vs SQS" (2026)
+21. **Codably** — "Message Queues for Developers: RabbitMQ vs Kafka vs SQS" (2026)
+22. **Calmops** — "Message Queue Deep Dive: Kafka, RabbitMQ, and SQS 2026" (2026)
+23. **Ajit Singh** — "Kafka vs RabbitMQ vs Amazon SQS: Picking the Right Message Broker" (2026)
+24. **BackendBytes** — "Kafka vs RabbitMQ vs NATS vs SQS" (2026)
+25. **DevTools Feed** — "Message Queues in System Design: Kafka's Dominance Hides the Real Tradeoffs" (2026)
+26. **NovVista** — "Message Queue Deep Dive: Kafka vs RabbitMQ vs AWS SQS" (2026)
+27. **CubeAPM** — "Monitoring RabbitMQ, Kafka, and ActiveMQ: The Engineer's Handbook" (2026)
+28. **OneUptime** — "Message Queue Monitoring with Prometheus Exporters" (2026)
+29. **SigNoz** — "Deep dive into observability of Messaging Queues with OpenTelemetry" (2024)
+30. **Factor House** — "Best practices for Kafka data observability" (2026)
+31. **techinterview.org** — "System Design: Microservices Data Patterns — Saga, Outbox Pattern" (2026)
+32. **techinterview.org** — "System Design: Distributed Transactions — Two-Phase Commit, Saga Pattern" (2026)
+33. **microservices.io** — "Pattern: Transactional outbox" (Official)
+34. **System Overflow** — "Implementation Patterns: Transactional Outbox, Idempotency, and Saga Pivots" (2026)
+35. **BackendBytes** — "Event-Driven Microservices in Go: Kafka, Sagas, and the Outbox Pattern" (2026)
+36. **DEV Community** — "System Design - 15. The Saga Pattern: How Uber Books a Trip" (2026)
+37. **Ajit Singh** — "Transactional Outbox Pattern: Never Lose an Event Again" (2026)
+38. **Distributed System Authority** — "Message Passing and Event-Driven Architecture" (2026)
+39. **Akka Documentation** — "Message Driven vs Event Driven" (Official)
+40. **Akamai** — "What Are Message Queues in Event-Driven Architecture?" (2026)
+41. **AlgoStreak** — "The Message Queue" (2026)
+42. **intervu.dev** — "Distributed Message Queue System Design: FAANG Interview Guide" (2026)
+43. **System Design Handbook** — "Design a Pub/Sub System: The Complete Guide" (2026)
+44. **prachub.com** — "Design distributed message queue service | Google Interview" (2025)
+45. **papersadda.com** — "System Design Interview Questions for Freshers 2026" (2026)
+
+### Key Takeaways for Your Notes
+
+> **From your queues.md, the most important insights preserved:**
+>
+> - The pizza shop analogy for understanding queues
+> - The "smart broker vs smart consumer" mental model (RabbitMQ vs Kafka)
+> - The dual write problem and outbox pattern explanation
+> - The event naming convention (facts not intentions)
+> - The anti-pattern of using databases as queues
+> - The "commit first, event later" rule
+
+---
