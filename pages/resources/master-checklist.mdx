@@ -1,0 +1,339 @@
+---
+title: Master Concept Checklist
+---
+
+import { Callout } from 'nextra/components'
+
+# Master Concept Checklist
+
+> Every concept, topic, and subtopic worth knowing for a strong backend engineering / system design interview in 2026 — organized into 16 stages, from internet fundamentals through AI-era system design. Use it as a checklist: tick off what you've mastered, and use the status column to see what's already covered on this site versus what you'll need to study elsewhere.
+
+**Legend:** ✅ Covered in depth on this site &nbsp;·&nbsp; 🟡 Partially covered &nbsp;·&nbsp; ⬜ Not yet covered on this site
+
+<Callout type="info">
+This checklist is intentionally broader than the site itself. Roughly 600+ subtopics are listed here across 16 stages; this site currently covers Stages 1, 2, 3, 5, 10, and 11 in full depth, with partial coverage of Stages 4, 6, 7, and 9. The gaps are called out explicitly, stage by stage, so you know exactly where to go looking elsewhere (see [Resources & References](/resources)) rather than assuming a topic is covered when it isn't.
+</Callout>
+
+---
+
+## Stage 0: Prerequisites ⬜ Not yet covered
+
+### How the Internet Works
+- Client-Server Architecture
+- Request-Response Model
+- HTTP/HTTPS Protocol
+- HTTP Methods (GET, POST, PUT, PATCH, DELETE)
+- HTTP Status Codes (2xx, 3xx, 4xx, 5xx)
+- HTTP/1.1 vs HTTP/2 vs HTTP/3
+- Cookies vs Sessions vs JWT
+- TLS/SSL Handshake
+- WebSocket Protocol
+- Server-Sent Events (SSE)
+
+### Networking Fundamentals
+- OSI Model (7 Layers)
+- TCP vs UDP
+- TCP Three-Way Handshake
+- IP Addressing (IPv4, IPv6)
+- DNS (Domain Name System)
+- DNS Resolution Process
+- DNS Caching and TTL
+- DNS Load Balancing
+- Ports and Sockets
+- NAT (Network Address Translation)
+- CDN Basics
+
+### Back-of-Envelope Math
+- Latency Numbers Every Engineer Should Know
+- Throughput Calculations
+- Storage Estimation
+- Bandwidth Estimation
+- QPS (Queries Per Second) Estimation
+- DAU/MAU to RPS Conversion
+- Power of Two Table for Capacity Planning
+
+<Callout type="warning">
+This is the single biggest gap on the site relative to the full curriculum. Networking fundamentals and back-of-envelope math are assumed prerequisite knowledge throughout every other chapter (TLS is covered as part of [Security](/09-security/security-fundamentals), and WebSockets/SSE have full chapters in [Real-Time](/10-real-time) — but core HTTP mechanics, the OSI model, DNS resolution, and capacity-estimation math have no dedicated page here yet). If you're not already comfortable doing back-of-envelope QPS/storage math, that's worth shoring up before diving into the scalability chapters.
+</Callout>
+
+---
+
+## Stage 1: Core Building Blocks ✅ Covered in depth
+
+Fully covered in [Core Building Blocks](/01-core-building-blocks).
+
+- **1.1 APIs** ✅ — REST, GraphQL, gRPC, API Gateway, API Design Patterns → [APIs](/01-core-building-blocks/apis)
+- **1.2 Databases** ✅ — Relational, NoSQL, Database Internals (B-Tree, LSM, WAL) → [Databases](/01-core-building-blocks/databases)
+- **1.3 Caching** ✅ — Strategies, Levels, Invalidation, Eviction, Distributed Caching, CDN → [Caching](/01-core-building-blocks/caching)
+- **1.4 Load Balancing** ✅ — Types, Algorithms, High Availability → [Load Balancing](/01-core-building-blocks/load-balancing)
+- **1.5 Proxies** ✅ — Forward, Reverse, Transparent, Anonymous, SOCKS → [Proxies](/01-core-building-blocks/proxies)
+
+---
+
+## Stage 2: Scalability & Performance ✅ Covered in depth
+
+Fully covered in [Scalability & Performance](/02-scalability).
+
+- **2.1 Horizontal vs Vertical Scaling** ✅ → [Horizontal vs Vertical](/02-scalability/horizontal-vs-vertical)
+- **2.2 Database Scaling** ✅ → [Database Scaling](/02-scalability/database-scaling)
+- **2.3 Sharding** ✅ → [Sharding](/02-scalability/sharding)
+- **2.4 Database Replication** ✅ → [Replication](/02-scalability/replication)
+- **2.5 Partitioning** ✅ → [Partitioning](/02-scalability/partitioning)
+- **2.6 Consistent Hashing** ✅ → [Consistent Hashing](/02-scalability/consistent-hashing)
+- **2.7 Denormalization** ✅ → [Denormalization](/02-scalability/denormalization)
+- **2.8 Rate Limiting** ✅ → [Rate Limiting](/02-scalability/rate-limiting)
+
+---
+
+## Stage 3: Distributed Systems ✅ Covered in depth
+
+Fully covered in [Distributed Systems](/03-distributed-systems).
+
+- **3.1 CAP Theorem** ✅ → [CAP Theorem](/03-distributed-systems/cap-theorem)
+- **3.2 PACELC Theorem** ✅ → [PACELC Theorem](/03-distributed-systems/pacelc-theorem)
+- **3.3 Consistency Models** ✅ → [Consistency Models](/03-distributed-systems/consistency-models)
+- **3.4 Consensus Algorithms** (Paxos, Raft, ZAB) ✅ → [Consensus Algorithms](/03-distributed-systems/consensus-algorithms)
+- **3.5 Distributed Transactions** (2PC, 3PC, Saga, Outbox, Event Sourcing, CQRS) ✅ → [Distributed Transactions](/03-distributed-systems/distributed-transactions)
+- **3.6 Distributed Systems Patterns** (Circuit Breaker, Bulkhead, Retry, Sidecar) ✅ → [Distributed Patterns](/03-distributed-systems/distributed-patterns)
+- **3.7 Distributed Data Structures** (CRDTs, Vector Clocks, Gossip) ✅ → [Distributed Data Structures](/03-distributed-systems/distributed-data-structures)
+- **3.8 Service Discovery** ✅ → [Service Discovery](/03-distributed-systems/service-discovery)
+- **3.9 Configuration Management** ✅ → [Configuration Management](/03-distributed-systems/configuration-management)
+
+---
+
+## Stage 4: Messaging & Async 🟡 Partially covered
+
+Covered in [Advanced Topics](/04-advanced-topics) and [Architecture Patterns](/05-architecture-patterns).
+
+- **4.1 Message Queues** (Point-to-Point, Pub-Sub, DLQ, Visibility Timeout) ✅ → [Message Queues](/04-advanced-topics/message-queues)
+- **4.2 Delivery Guarantees** (At-Most/Least/Exactly-Once, Idempotent Consumers) ✅ → covered within [Message Queues](/04-advanced-topics/message-queues)
+- **4.3 Message Queue Technologies** (Kafka, RabbitMQ, SQS/SNS, Pulsar, NATS, Redis Streams) ✅ → covered within [Message Queues](/04-advanced-topics/message-queues)
+- **4.4 Event-Driven Architecture** (Events vs Commands, Event Bus, Schema Registry) ✅ → [Event-Driven](/05-architecture-patterns/event-driven) and [Event Sourcing & CQRS](/04-advanced-topics/event-sourcing-cqrs)
+- **4.5 Stream Processing** (Kafka Streams, Flink, Spark Streaming, Windowing, Watermarks) ⬜ — not covered anywhere on the site
+- **4.6 CQRS** (Command/Query separation, Projections, Read/Write models) ✅ → [Event Sourcing & CQRS](/04-advanced-topics/event-sourcing-cqrs)
+
+<Callout type="warning">
+**Stream processing (4.5) is a real gap.** Everything about *messaging* (queues, brokers, delivery guarantees) is covered well, but *stream processing* — the layer that continuously transforms and aggregates data as it flows through Kafka/Pulsar (windowing, watermarks, exactly-once semantics in a streaming engine like Flink) — is a distinct skill set with no dedicated page yet. Worth knowing if the interview leans toward data-intensive or analytics-heavy systems.
+</Callout>
+
+---
+
+## Stage 5: Architecture Patterns ✅ Covered in depth
+
+Fully covered in [Architecture Patterns](/05-architecture-patterns).
+
+- **5.1 Monolithic Architecture** ✅ → [Monolith](/05-architecture-patterns/monolith)
+- **5.2 Microservices Architecture** ✅ → [Microservices](/05-architecture-patterns/microservices)
+- **5.3 Serverless Architecture** ✅ → [Serverless](/05-architecture-patterns/serverless)
+- **5.4 Event-Driven Microservices** ✅ → [Event-Driven](/05-architecture-patterns/event-driven)
+- **5.5 Domain-Driven Design (DDD)** ✅ → [DDD](/05-architecture-patterns/ddd)
+- **5.6 Twelve-Factor App** ✅ → [Twelve-Factor](/05-architecture-patterns/twelve-factor)
+- **5.7 Design Patterns** (Creational, Structural, Behavioral, Saga, BFF) ✅ → [Design Patterns](/04-advanced-topics/design-patterns)
+
+---
+
+## Stage 6: Reliability & Observability 🟡 Partially covered
+
+Partially covered in [Observability](/08-observability).
+
+- **6.1 Reliability Engineering** (SLA/SLI/SLO, Error Budgets, MTBF/MTTR) ✅ → [Observability Fundamentals](/08-observability/observability-fundamentals)
+- **6.2 Fault Tolerance** (Chaos Engineering, Multi-Region, DR, RPO/RTO) ⬜ — not covered
+- **6.3 Monitoring & Observability** (Logs/Metrics/Traces, Golden Signals, RED/USE) ✅ → [Observability Fundamentals](/08-observability/observability-fundamentals)
+- **6.4 Performance Engineering** (Load/Stress/Soak Testing, Capacity Planning) ⬜ — not covered
+- **6.5 Incident Management** (Postmortems, Root Cause Analysis, On-Call) ⬜ — not covered
+
+<Callout type="warning">
+The *theory* of reliability (SLOs, error budgets, the three pillars, alerting philosophy) is well covered. The *operational* side — chaos engineering, disaster recovery, load testing tools (k6/Locust/JMeter), and how to actually run a postmortem — is not. These come up often in senior-level interviews ("tell me about an incident you handled") and are worth studying from the SRE book or an engineering blog if that's the direction your interview loop leans.
+</Callout>
+
+---
+
+## Stage 7: Security 🟡 Partially covered
+
+Covered in [Security](/09-security).
+
+- **7.1 Authentication** (Session, JWT, OAuth 2.0, OIDC, MFA) ✅ → [Security Fundamentals](/09-security/security-fundamentals)
+- **7.1 (cont.)** SAML, Passwordless Authentication ⬜ — mentioned in passing, not covered in depth
+- **7.2 Authorization** (RBAC, ABAC, ACL, Least Privilege) 🟡 — RBAC/ABAC named, not deeply covered
+- **7.3 Application Security** (OWASP Top 10, SQLi, XSS, CSRF, SSRF, CORS) ✅ → [Security Fundamentals](/09-security/security-fundamentals)
+- **7.4 Data Security** (Encryption at Rest/Transit, Key Management, Masking, GDPR) 🟡 — encryption covered, masking/tokenization/GDPR not
+- **7.5 Infrastructure Security** (Firewalls, DDoS, WAF, Zero Trust, Secrets Mgmt) 🟡 — DDoS and secrets management covered, Zero Trust and WAF internals are not
+
+---
+
+## Stage 8: DevOps & Infrastructure ⬜ Not yet covered
+
+### 8.1 Containers
+- Docker Fundamentals
+- Dockerfile
+- Docker Compose
+- Container Orchestration
+- Container Registry
+
+### 8.2 Kubernetes
+- Pods, Deployments, Services
+- ConfigMaps and Secrets
+- Ingress Controllers
+- Horizontal Pod Autoscaler (HPA)
+- StatefulSets
+- Persistent Volumes
+- Service Mesh (Istio, Linkerd)
+- Helm Charts
+
+### 8.3 CI/CD
+- Continuous Integration
+- Continuous Delivery vs Continuous Deployment
+- Pipeline Design
+- GitOps
+- Blue-Green Deployments
+- Canary Releases
+- Rolling Deployments
+- Feature Flags
+
+### 8.4 Infrastructure as Code
+- Terraform
+- CloudFormation
+- Pulumi
+- Ansible
+
+### 8.5 Cloud Services
+- Compute (EC2, Lambda, GCE, Azure VMs)
+- Storage (S3, EBS, GCS, Blob Storage)
+- Databases (RDS, DynamoDB, Cloud SQL, Cosmos DB)
+- Managed Kafka (MSK, Confluent Cloud)
+- Managed Queues (SQS, Pub/Sub)
+- CDN (CloudFront, Cloud CDN, Azure CDN)
+- DNS (Route 53, Cloud DNS)
+
+<Callout type="info">
+Kubernetes's DNS-based service discovery is mentioned briefly in [Service Discovery](/03-distributed-systems/service-discovery), but that's the only DevOps/infrastructure topic that appears anywhere on the site. This entire stage is a legitimate blind spot — if your interview loop or role leans infrastructure-heavy, this is the highest-value stage to study from external resources.
+</Callout>
+
+---
+
+## Stage 9: Search & Data Systems 🟡 Partially covered
+
+- **9.1 Full-Text Search** (Inverted Index, Elasticsearch, Lucene, Autocomplete) ⬜ — not covered
+- **9.2 Data Warehousing** (OLTP vs OLAP, Star Schema, ETL/ELT, Data Lakes) ⬜ — not covered
+- **9.3 Big Data Processing** (MapReduce, Hadoop, Spark, Airflow) ⬜ — not covered
+- **9.4 Graph Databases** (Property Graph Model, Cypher/Gremlin, Traversal) 🟡 — mentioned as a database type in [Databases](/01-core-building-blocks/databases), not covered as its own topic with query languages/traversal
+
+<Callout type="warning">
+Full-text search and data warehousing are common in "design a search engine / design an analytics pipeline"-style questions and have no coverage here yet.
+</Callout>
+
+---
+
+## Stage 10: Real-Time & Communication ✅ Covered in depth
+
+Fully covered in [Real-Time & Communication](/10-real-time).
+
+- **10.1 Real-Time Communication** (WebSockets, SSE, Long/Short Polling, Socket.IO) ✅ → [WebSockets](/10-real-time/websockets), [SSE](/10-real-time/sse), [Socket.IO](/10-real-time/socketio-notifications)
+- **10.2 Video & Streaming** (Adaptive Bitrate, Transcoding, Live Streaming, DRM) ✅ → [Video Streaming](/10-real-time/video-streaming)
+- **10.3 Presence Systems** (Online/Offline, Last Seen, Heartbeats) ✅ → [Presence](/10-real-time/presence)
+
+---
+
+## Stage 11: Location & Geospatial ✅ Covered in depth
+
+Fully covered in [Location & Geospatial](/11-geospatial).
+
+- **11.1 Geospatial Data** (QuadTrees, R-Trees, Geohashing, H3, Geo-Fencing) ✅ → [Spatial Indexes](/11-geospatial/spatial-indexes)
+- **11.2 Location-Based Services** (Nearby Search, Routing, Tracking, Surge, ETA) ✅ → [Nearby Search](/11-geospatial/nearby-search), [Route Optimization](/11-geospatial/route-optimization), [Real-Time Tracking](/11-geospatial/real-time-tracking)
+
+---
+
+## Stage 12: Classic System Design Problems ⬜ Not covered as worked examples
+
+The site teaches every *mechanism* these problems draw on, but doesn't currently walk through any of the classic problems end-to-end as assembled solutions. See the [Resources page](/resources#11-system-design-question-banks) for ranked question banks and full walkthroughs elsewhere.
+
+**Beginner:** URL Shortener, Rate Limiter, Distributed Cache, Pastebin, Unique ID Generator, Notification System, Web Crawler, CDN, Key-Value Store
+
+**Intermediate:** WhatsApp/Slack, News Feed, Search Autocomplete, YouTube/Netflix, Google Drive/Dropbox, Instagram, Uber/Lyft, Proximity Service, TikTok, Hotel Reservation, Reddit, Google Maps
+
+**Advanced:** Google Docs, Payment System (Stripe), Stock Exchange, Distributed Message Queue, Zoom, S3-like Object Storage, DoorDash/Uber Eats, Code Deployment System, Distributed Locking Service, Google Search, Google Ads, Distributed Training System
+
+<Callout type="info">
+**How to use this site for a classic problem:** pick a problem (say, "Design Uber"), then pull the mechanisms from the relevant chapters — [Geospatial](/11-geospatial) for driver matching, [Real-Time](/10-real-time) for live location updates, [Distributed Systems](/03-distributed-systems) for consistency during surge pricing, [Scalability](/02-scalability) for sharding trip data. The site gives you the vocabulary and tradeoffs; assembling them into a 45-minute answer is a practiced skill on top of that, best built through the mock-interview platforms on the [Resources page](/resources).
+</Callout>
+
+---
+
+## Stage 13: AI-Era System Design (New in 2026) ⬜ Not covered
+
+### 13.1 LLM Infrastructure
+Transformer Architecture, Attention Mechanism, Tokenization, Embeddings, KV Cache, GPU Memory Management, Inference Optimization (Speculative Decoding, Continuous Batching), Model Serving (vLLM, TensorRT), Prompt Engineering, Chain-of-Thought, Tree-of-Thought
+
+### 13.2 RAG (Retrieval-Augmented Generation)
+Document Chunking Strategies, Embedding Models, Vector Similarity Search, Hybrid Search, Re-Ranking, Naive vs Agentic RAG, RAG Evaluation (RAGAS), Semantic Caching
+
+### 13.3 Vector Databases
+HNSW, IVF, pgvector, Pinecone, Weaviate, Qdrant, Milvus, Multi-Tenancy in Vector DBs
+
+### 13.4 AI Agents
+Tool Use / Function Calling, ReAct Pattern, Multi-Agent Orchestration, State Machine Agents, Agent Memory, Model Context Protocol (MCP), Agent-to-Agent Protocol (A2A), Guardrails and Safety
+
+### 13.5 MLOps & AI Observability
+Model Versioning, Prompt Versioning, LLM Tracing (LangSmith, Phoenix), Drift Detection, AI Cost Optimization, Guardrails AI
+
+### 13.6 AI System Design Patterns
+Orchestrator-Worker, Hierarchical Agent, Event-Driven Agent Trigger, Fan-Out/Fan-In, Circuit Breaker for LLM Calls, Fallback Chains, Semantic Caching Layer
+
+<Callout type="warning">
+**This is the largest single gap relative to a 2026 curriculum.** AI-era system design — RAG pipelines, vector databases, agent orchestration — is increasingly asked about directly, especially at companies building AI products. None of it is covered on this site yet. If you're interviewing anywhere near an AI product team, this stage deserves dedicated study time from current, fast-moving sources (this space changes month to month, faster than any static reference can track) — see the engineering blogs and newsletters on the [Resources page](/resources).
+</Callout>
+
+---
+
+## Stage 14: Low-Level Design (LLD) 🟡 Partially covered
+
+- **14.1 Object-Oriented Programming** (SOLID, DRY/KISS/YAGNI, Composition vs Inheritance) ⬜ — not covered
+- **14.2 Design Patterns** (Creational, Structural, Behavioral — all 23 GoF patterns) ✅ → [Design Patterns](/04-advanced-topics/design-patterns)
+- **14.3 UML Diagrams** (Class, Sequence, Activity, State, Use Case) ⬜ — not covered
+- **14.4 LLD Problems** (Parking Lot, Elevator, Vending Machine, Chess, Hash Map, File System) ⬜ — not covered
+
+<Callout type="info">
+High-level design patterns (Circuit Breaker, Saga, BFF) are covered thoroughly; classic Gang-of-Four object-oriented patterns are covered in [Design Patterns](/04-advanced-topics/design-patterns) — but this site is fundamentally an HLD (high-level design) reference. If your interview loop includes an LLD round (common at some companies for mid-level roles), the OOP principles, UML notation, and classic LLD problems need a separate resource — see [awesome-low-level-design](https://github.com/ashishps1/awesome-low-level-design) on the [Resources page](/resources).
+</Callout>
+
+---
+
+## Stage 15: Strategic Topics for 2026 🟡 Partially covered
+
+### For Backend Positioning
+System Thinking, Trade-off Analysis, Failure Mode Analysis, Operational Maturity, Cost Awareness, Security Mindset, Product Impact, Communication, Incident Response, Code/Architecture Review
+
+### Interview Meta-Skills
+Requirements Gathering, Scale Estimation, High-Level Design → Deep Dive Flow, Trade-off Discussion Framework, "It Depends" with Reasoning, Naming Your Assumptions, Time Management, Whiteboard/Diagramming Skills
+
+<Callout type="info">
+This isn't a chapter you "cover" so much as a way of thinking that should run through every other chapter — and it does, informally, via the **Interview Tips** section at the end of nearly every page on this site, plus the dedicated [Decision Frameworks](/06-design-decisions/decision-frameworks) chapter, which is built entirely around trade-off analysis and the "it depends, and here's how" framing. Scale estimation (DAU → QPS → Storage) specifically ties back to the Stage 0 gap above — it's a discrete, practicable skill worth drilling separately from reading any chapter here.
+</Callout>
+
+---
+
+## Topic Count Summary
+
+| Stage | Topic Count (approx.) | Site Coverage |
+|---|---|---|
+| Stage 0: Prerequisites | 25+ | ⬜ Not covered |
+| Stage 1: Core Building Blocks | 100+ | ✅ Full |
+| Stage 2: Scalability | 50+ | ✅ Full |
+| Stage 3: Distributed Systems | 60+ | ✅ Full |
+| Stage 4: Messaging & Async | 40+ | 🟡 Partial (stream processing missing) |
+| Stage 5: Architecture Patterns | 50+ | ✅ Full |
+| Stage 6: Reliability & Observability | 40+ | 🟡 Partial (chaos/DR/incident mgmt missing) |
+| Stage 7: Security | 40+ | 🟡 Partial (SAML, ABAC/ACL depth, GDPR missing) |
+| Stage 8: DevOps & Infrastructure | 30+ | ⬜ Not covered |
+| Stage 9: Search & Data Systems | 25+ | ⬜ Not covered |
+| Stage 10: Real-Time & Communication | 15+ | ✅ Full |
+| Stage 11: Location & Geospatial | 10+ | ✅ Full |
+| Stage 12: Classic SD Problems | 30+ | ⬜ Mechanisms covered, worked examples not |
+| Stage 13: AI-Era System Design | 40+ | ⬜ Not covered |
+| Stage 14: Low-Level Design | 30+ | 🟡 Partial (GoF patterns only) |
+| Stage 15: Strategic Topics | 15+ | 🟡 Woven throughout, not standalone |
+| **Total** | **600+ concepts** | **~6 of 16 stages fully covered** |
+
+---
+
+*Use this as a living checklist — tick off what you've mastered, and treat the ⬜ stages as your external-reading list rather than assuming this site is a complete curriculum on its own.*
