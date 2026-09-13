@@ -6,8 +6,7 @@ const withNextra = nextra({
   defaultShowCopyCode: true,
 })
 
-export default withNextra({
-  output: 'export',
+export default withNextra({ 
   images: {
     unoptimized: true,
   },
