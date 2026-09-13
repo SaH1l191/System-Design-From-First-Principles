@@ -85,7 +85,7 @@ div[class*="sidebar"] {
 }
 
 /* Sidebar active link — tinted bg + left accent bar */
-.nx-flex nx-gap-1 nx-rounded nx-px-2 nx-py-1.5 nx-text-sm nx-transition-colors [aria-current="page"],
+[class*="nx-flex"][aria-current="page"],
 aside a[aria-current="page"],
 aside li > a.active {
   background: var(--accent-sidebar-active-bg) !important;
