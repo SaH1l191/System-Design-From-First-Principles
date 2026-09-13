@@ -2,8 +2,24 @@ import { DocsThemeConfig } from 'nextra-theme-docs'
 
 const config: DocsThemeConfig = {
   logo: (
-    <span style={{ fontWeight: 800, fontSize: '1.2em' }}>
-      SD<span style={{ color: '#6366f1' }}>FP</span>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+      <span
+        style={{
+          background: '#c1391c',
+          color: '#fff',
+          width: '26px',
+          height: '26px',
+          borderRadius: '6px',
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: 'monospace',
+          fontSize: '0.8em',
+          fontWeight: 700,
+        }}
+      >
+        S
+      </span>
+      <span style={{ fontWeight: 600, fontSize: '1.05em' }}>SDFP</span>
     </span>
   ),
   project: {

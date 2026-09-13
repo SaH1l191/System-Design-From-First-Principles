@@ -1,0 +1,149 @@
+/* Warm Claude-like theme — overrides for Nextra docs theme */
+
+:root {
+  /* Primary color: warm terracotta/red */
+  --nextra-primary-hue: 12deg;
+  --nextra-primary-saturation: 75%;
+
+  /* Backgrounds */
+  --nextra-bg: #fcfcfa;
+  --nextra-sidebar-bg: #f4f3ef;
+  --nextra-navbar-bg: rgba(252, 252, 250, 0.8);
+
+  /* Text */
+  --nextra-content: #171612;
+  --nextra-muted: #56514a;
+
+  /* Borders */
+  --nextra-border: #e3e0d8;
+
+  /* Code */
+  --nextra-code-bg: #16161a;
+
+  /* Links / accent */
+  --nextra-link: #c1391c;
+
+  /* Selection */
+  --nextra-selection-bg: #c1391c;
+  --nextra-selection-color: #fff;
+}
+
+html.dark {
+  /* Primary color: warm orange */
+  --nextra-primary-hue: 20deg;
+  --nextra-primary-saturation: 92%;
+
+  /* Backgrounds */
+  --nextra-bg: #0f0f0e;
+  --nextra-sidebar-bg: #181815;
+  --nextra-navbar-bg: rgba(15, 15, 14, 0.8);
+
+  /* Text */
+  --nextra-content: #edebe5;
+  --nextra-muted: #a8a399;
+
+  /* Borders */
+  --nextra-border: #2a2926;
+
+  /* Code */
+  --nextra-code-bg: #131317;
+
+  /* Links / accent */
+  --nextra-link: #ff7a4d;
+
+  /* Selection */
+  --nextra-selection-bg: #ff7a4d;
+  --nextra-selection-color: #1a0e08;
+}
+
+/* Global overrides */
+body {
+  background: var(--nextra-bg);
+  color: var(--nextra-content);
+}
+
+::selection {
+  background: var(--nextra-selection-bg);
+  color: var(--nextra-selection-color);
+}
+
+/* Sidebar */
+aside[class*="nextra-sidebar"],
+div[class*="sidebar"] {
+  background: var(--nextra-sidebar-bg) !important;
+}
+
+/* Navbar */
+nav.nx-top-0 {
+  background: var(--nextra-navbar-bg) !important;
+  border-color: var(--nextra-border) !important;
+}
+
+/* Footer border */
+footer {
+  border-color: var(--nextra-border) !important;
+}
+
+/* Code blocks — dark warm tone */
+pre {
+  background: #16161a !important;
+}
+
+html.dark pre {
+  background: #131317 !important;
+}
+
+/* Inline code */
+code {
+  background: #f4f3ef;
+}
+
+html.dark code {
+  background: #21201c;
+}
+
+/* Code syntax highlighting warm tones */
+pre .token.comment,
+pre .token.prolog,
+pre .token.doctype,
+pre .token.cdata {
+  color: #6f6d7b;
+}
+
+pre .token.keyword,
+pre .token.tag {
+  color: #ff8a63;
+}
+
+pre .token.string,
+pre .token.attr-value {
+  color: #9ecf7e;
+}
+
+pre .token.number {
+  color: #79b3d4;
+}
+
+pre .token.type,
+pre .token.class-name {
+  color: #dcb45f;
+}
+
+pre .token.function {
+  color: #c9a2f0;
+}
+
+pre .token.punctuation {
+  color: #9a97a6;
+}
+
+/* Sidebar active link warm accent */
+a.active, [aria-current="page"] {
+  color: var(--nextra-link) !important;
+}
+
+/* Search box removal — hide all search elements */
+.nextra-search,
+div[class*="nextra-search"] {
+  display: none !important;
+}
