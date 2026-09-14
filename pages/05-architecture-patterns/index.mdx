@@ -1,0 +1,34 @@
+---
+title: Architecture Patterns
+---
+
+# Architecture Patterns
+
+> How you organize your system determines how it scales, how it fails, and how your team works.
+
+The big architectural decisions. Monolith vs microservices isn't a binary choice — it's a spectrum, and understanding where you are on that spectrum is what matters.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **Monolithic Architecture** | Single deployable unit, modular monolith |
+| **Microservices** | Service decomposition, bounded context, service mesh |
+| **Serverless** | FaaS, BaaS, cold starts, durable functions |
+| **Event-Driven** | Choreography vs orchestration, saga, data consistency |
+| **Domain-Driven Design** | Bounded context, aggregates, entities, domain events |
+| **Twelve-Factor App** | The methodology for building modern SaaS |
+
+---
+
+## The Decision Framework
+
+Ask yourself:
+1. **Team size** — can your team own separate services?
+2. **Domain complexity** — is the business logic separable?
+3. **Scale requirements** — do different parts need different scaling?
+4. **Operational maturity** — can you run distributed systems?
+
+Start monolith. Split when the pain of staying together exceeds the pain of splitting.

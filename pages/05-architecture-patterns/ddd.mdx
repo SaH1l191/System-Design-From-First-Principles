@@ -1,0 +1,590 @@
+---
+title: Domain-Driven Design (DDD)
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.5 Domain-Driven Design (DDD)
+
+> DDD is a software design approach that focuses on modeling software to match a domain according to input from that domain's experts. It's the best framework for deciding where to draw service boundaries in microservices.
+
+## What is DDD?
+
+```
+DDD focuses on:
+  1. The domain (what the business does)
+  2. The model (how we represent the domain in code)
+  3. The language (shared vocabulary between developers and domain experts)
+
+Goal: Software that matches the business domain
+Not: Technology-first design
+```
+
+### Strategic DDD (Architecture-Level)
+
+```
+Strategic DDD defines:
+  - Bounded Contexts (service boundaries)
+  - Context Maps (relationships between contexts)
+  - Ubiquitous Language (shared vocabulary)
+```
+
+### Tactical DDD (Code-Level)
+
+```
+Tactical DDD defines:
+  - Entities (objects with identity)
+  - Value Objects (immutable objects without identity)
+  - Aggregates (clusters of objects treated as a unit)
+  - Domain Events (things that happened)
+  - Repositories (data access abstractions)
+  - Services (stateless operations)
+```
+
+## Bounded Context
+
+### What is a Bounded Context?
+
+A Bounded Context is a way of splitting a large business domain into smaller, independent parts, where each part has its own model, rules, and terminology.
+
+Think of it like this:
+
+- Each service only knows what it needs to do its own job.
+- It deliberately hides everything else to keep the system simpler and less coupled.
+
+### Why Bounded Contexts Are Useful
+
+Imagine you build an e-commerce application as one giant system.
+
+If every service knew everything about Orders, Products, Customers, Payments, Inventory, Shipping, Discounts, Reviews, etc., then:
+
+- Every change would affect many services.
+- Code becomes tightly coupled.
+- Teams can't work independently.
+- The system becomes difficult to maintain.
+
+Bounded Contexts solve this by giving each service its own "world."
+
+### Example: Order Context
+
+The Order service's job is to create and manage orders.
+
+It knows:
+
+```
+Order
+  - OrderId
+  - Items
+  - TotalAmount
+  - ShippingAddress
+  - Status
+```
+
+When it refers to a Product, it only needs:
+
+```
+Product
+  - ProductId
+  - Name
+  - Price
+```
+
+It does NOT care about:
+
+- Inventory count
+- Supplier
+- Warehouse location
+- Manufacturing details
+
+Those belong somewhere else.
+
+### Example: Inventory Context
+
+The Inventory service has a completely different model.
+
+```
+Product
+  - ProductId
+  - QuantityAvailable
+  - Warehouse
+  - ReorderLevel
+```
+
+Notice that **Product means something different here.**
+
+The Inventory service doesn't care about:
+
+- Product price
+- Product description
+- Customer reviews
+
+### Example: Payment Context
+
+Payment only needs:
+
+```
+Order
+  - OrderId
+  - TotalAmount
+```
+
+It doesn't need:
+
+- Order Items
+- Shipping Address
+- Coupons
+- Taxes breakdown
+
+Those are irrelevant to processing a payment.
+
+### What Does a Bounded Context Actually Do?
+
+A bounded context defines:
+
+- **What data a service owns.**
+- **What business rules it enforces.**
+- **Which objects exist inside it.**
+- **What information it exposes to other services.**
+
+It also prevents services from depending on each other's internal models.
+
+### Context Map
+
+A Context Map shows how bounded contexts communicate.
+
+```
+User
+   │
+   ▼
+Order
+   │
+   ▼
+Payment
+   │
+   ▼
+Shipping
+
+Each arrow represents communication between services.
+```
+
+### Published Language
+
+Instead of exposing internal objects, services expose a stable contract (API or events).
+
+For example, the Order Service publishes:
+
+```json
+{
+  "orderId": 123,
+  "totalAmount": 500,
+  "customerId": 10
+}
+```
+
+Payment only understands this contract. It does not receive the Order service's internal classes or database tables.
+
+This shared contract is called the **Published Language**.
+
+### Anti-Corruption Layer (ACL)
+
+Suppose two services model the same concept differently:
+
+```
+Order Service:
+  OrderStatus
+    - Pending
+    - Paid
+    - Cancelled
+
+Shipping Service:
+  ShipmentStatus
+    - Waiting
+    - Ready
+    - Shipped
+```
+
+An ACL translates between the two models:
+
+```
+Order says: Paid
+       ↓
+  ACL converts it
+       ↓
+Shipping says: Ready
+```
+
+This prevents the Shipping service from having to change whenever the Order service changes its internal model.
+
+### Bounded Context Summary
+
+```
+E-Commerce
+
+        +------------------+
+        | Product Service  |
+        +------------------+
+               │
+               │
+        +------------------+
+        | Order Service    |
+        +------------------+
+               │
+               ▼
+        +------------------+
+        | Payment Service  |
+        +------------------+
+               │
+               ▼
+        +------------------+
+        | Shipping Service |
+        +------------------+
+
+Each service:
+  - Owns its own database.
+  - Has its own domain model.
+  - Knows only the information it needs.
+  - Communicates through APIs or events.
+```
+
+> **In one sentence:** A Bounded Context defines the boundary where a specific domain model is valid. It helps keep services independent by ensuring each one owns its own business logic and only knows the information necessary for its responsibilities. A Context Map then documents how those separate contexts communicate — using mechanisms such as Published Language (shared API/event contracts) or an Anti-Corruption Layer (translation between different models).
+
+### Bounded Context Example (Visual)
+
+```
+E-commerce domain:
+  ┌──────────────────────────────────────────┐
+  │           ORDER BOUNDED CONTEXT          │
+  │                                          │
+  │  Order                                   │
+  │    ├── OrderItem (list of items)         │
+  │    ├── OrderStatus                       │
+  │    ├── TotalAmount                       │
+  │    └── ShippingAddress                   │
+  │                                          │
+  │  Knows about:                            │
+  │    - Product (ID + Name + Price only)    │
+  │    - Customer (ID + Name only)           │
+  │                                          │
+  │  Does NOT know about:                    │
+  │    - Product inventory details           │
+  │    - Customer payment methods            │
+  │    - Shipping carrier details            │
+  └──────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────┐
+  │          PAYMENT BOUNDED CONTEXT         │
+  │                                          │
+  │  Payment                                 │
+  │    ├── PaymentMethod                     │
+  │    ├── Amount                            │
+  │    ├── Status                            │
+  │    └── TransactionId                     │
+  │                                          │
+  │  Knows about:                            │
+  │    - Order (ID + TotalAmount only)       │
+  │    - Customer (ID + PaymentMethods)      │
+  │                                          │
+  │  Does NOT know about:                    │
+  │    - Order items                         │
+  │    - Shipping details                    │
+  │    - Product details                     │
+  └──────────────────────────────────────────┘
+```
+
+## Aggregates
+
+### What is an Aggregate?
+
+An Aggregate is a cluster of domain objects that can be treated as a single unit. Each aggregate has a root entity (Aggregate Root) and a boundary.
+
+```
+Order Aggregate:
+┌──────────────────────────────────────┐
+│ Order (Aggregate Root)               │
+│                                      │
+│  id: 123                             │
+│  status: PENDING                     │
+│  total: 150.00                       │
+│                                      │
+│  ┌──────────────────────────────┐   │
+│  │ OrderItem (child entity)     │   │
+│  │  product_id: "prod-1"        │   │
+│  │  quantity: 2                 │   │
+│  │  price: 50.00                │   │
+│  └──────────────────────────────┘   │
+│                                      │
+│  ┌──────────────────────────────┐   │
+│  │ OrderItem (child entity)     │   │
+│  │  product_id: "prod-2"        │   │
+│  │  quantity: 1                 │   │
+│  │  price: 50.00                │   │
+│  └──────────────────────────────┘   │
+│                                      │
+│  Methods:                            │
+│    addItem(product, qty)             │
+│    removeItem(product)               │
+│    calculateTotal()                  │
+│    submit()                          │
+└──────────────────────────────────────┘
+
+Rules:
+  - Only Order (root) can be accessed directly
+  - OrderItems are accessed through Order
+  - All changes go through Order methods
+  - Order ensures consistency rules
+```
+
+### Aggregate Design Rules
+
+| Rule | Description | Example |
+| --- | --- | --- |
+| **Protect business invariants** | Aggregate root ensures consistency | Order ensures total is correct |
+| **Reference by identity** | Don't embed other aggregates, reference by ID | Order has `customer_id`, not `Customer` object |
+| **One aggregate per transaction** | Don't modify multiple aggregates in one transaction | Don't update Order and Customer atomically |
+| **Small aggregates** | Keep aggregates small for performance | Don't put all Order data in one aggregate |
+
+## Entities vs Value Objects
+
+### Entities
+
+Entities have identity and lifecycle. Two entities with the same attributes are different if they have different IDs.
+
+```
+Entity example:
+  User { id: "user-1", name: "Alice", email: "alice@example.com" }
+  User { id: "user-2", name: "Alice", email: "alice@example.com" }
+  
+  These are DIFFERENT users (different IDs)
+  
+  Identity: id field
+  Lifecycle: Created, modified, deleted
+  Equality: Based on ID, not attributes
+```
+
+### Value Objects
+
+Value objects are immutable and have no identity. Two value objects with the same attributes are equal.
+
+```
+Value Object example:
+  Money { amount: 100, currency: "USD" }
+  Money { amount: 100, currency: "USD" }
+  
+  These are EQUAL (same values)
+  
+  No identity field
+  Immutable (cannot change after creation)
+  Equality: Based on all attributes
+  Replace: Don't modify, create new instance
+```
+
+### Comparison
+
+| Aspect | Entity | Value Object |
+| --- | --- | --- |
+| **Identity** | Has unique ID | No identity |
+| **Equality** | Based on ID | Based on attributes |
+| **Mutability** | Mutable (can change) | Immutable (cannot change) |
+| **Lifecycle** | Created, modified, deleted | Created, replaced (never modified) |
+| **Example** | User, Order, Product | Money, Address, Email, DateRange |
+| **Storage** | Stored with ID | Stored as embedded value |
+
+## Domain Events
+
+### What are Domain Events?
+
+Domain Events represent something meaningful that happened in the domain. They are facts — things that already occurred.
+
+```
+Domain Events (past tense):
+  OrderCreated
+  OrderPaid
+  OrderShipped
+  UserRegistered
+  PaymentProcessed
+  InventoryReserved
+
+Not events (commands):
+  CreateOrder      → Command (not yet happened)
+  ProcessPayment   → Command
+  ShipOrder        → Command
+```
+
+### Domain Events in Code
+
+```python
+# Domain Event
+class OrderCreated:
+    def __init__(self, order_id, customer_id, items, total):
+        self.order_id = order_id
+        self.customer_id = customer_id
+        self.items = items
+        self.total = total
+        self.occurred_at = datetime.now()
+
+# Publishing domain events
+class Order:
+    def create(self, customer_id, items):
+        # Business logic
+        self.status = "CREATED"
+        
+        # Publish domain event
+        event = OrderCreated(
+            order_id=self.id,
+            customer_id=customer_id,
+            items=items,
+            total=self.calculate_total()
+        )
+        self.events.append(event)
+```
+
+### Benefits of Domain Events
+
+| Benefit | Description |
+| --- | --- |
+| **Audit trail** | Complete history of what happened |
+| **Integration** | Other services can react to events |
+| **Decoupling** | Service doesn't know who consumes events |
+| **Temporal queries** | "What was the state at time T?" |
+| **Replay** | Rebuild state by replaying events |
+
+## Repositories
+
+### What is a Repository?
+
+A Repository abstracts data access. It provides a collection-like interface for accessing domain objects without exposing data storage details.
+
+```python
+# Repository interface
+class OrderRepository:
+    def find_by_id(self, order_id) -> Order
+    def find_by_customer(self, customer_id) -> List[Order]
+    def save(self, order: Order)
+    def delete(self, order_id)
+
+# Implementation (PostgreSQL)
+class PostgresOrderRepository:
+    def __init__(self, db_connection):
+        self.db = db_connection
+    
+    def find_by_id(self, order_id):
+        row = self.db.query("SELECT * FROM orders WHERE id = %s", order_id)
+        return self._map_to_domain(row)
+
+# Implementation (MongoDB)
+class MongoOrderRepository:
+    def __init__(self, mongo_client):
+        self.collection = mongo_client.orders
+    
+    def find_by_id(self, order_id):
+        doc = self.collection.find_one({"_id": order_id})
+        return self._map_to_domain(doc)
+```
+
+### Repository Pattern Benefits
+
+```
+Without Repository:
+  OrderService
+    └── Direct SQL queries mixed with business logic
+    └── Tightly coupled to PostgreSQL
+
+With Repository:
+  OrderService
+    └── Calls OrderRepository (interface)
+    └── Implementation: PostgresOrderRepository (can swap to MongoDB)
+    └── Business logic separated from data access
+```
+
+## Anti-Corruption Layer
+
+### What is an Anti-Corruption Layer (ACL)?
+
+An ACL is a translation layer between your domain and an external system. It prevents the external system's model from polluting your domain.
+
+```
+Your Domain                    External System
+┌──────────────┐              ┌──────────────┐
+│  Order       │              │  Legacy      │
+│  Service     │              │  ERP System  │
+│              │              │              │
+│  Order {     │   ┌────────┐ │  ORD {       │
+│    id        │◄──┤  ACL   ├─┤    ORD_ID    │
+│    items     │   │        │ │    ITEM_LIST │
+│    total     │   │Translate│ │    TOT_AMT  │
+│  }           │   └────────┘ │  }           │
+└──────────────┘              └──────────────┘
+
+ACL translates:
+  Your model ←→ External model
+  Order.id ←→ ORD.ORD_ID
+  Order.items ←→ ORD.ITEM_LIST
+  Order.total ←→ ORD.TOT_AMT
+```
+
+### When to Use ACL
+
+- Integrating with legacy systems
+- Using third-party APIs with different models
+- Connecting to systems you don't control
+- Protecting your domain from external changes
+
+## Strangler Fig Pattern
+
+### What is the Strangler Fig Pattern?
+
+A strategy for gradually replacing a legacy system by routing traffic to the new system piece by piece, until the old system is fully replaced.
+
+```
+Phase 1: Both systems
+  ┌─────────────────────────────────────┐
+  │           API Gateway               │
+  │   ┌───────────┐ ┌───────────┐      │
+  │   │ Legacy    │ │ New       │      │
+  │   │ System    │ │ Service 1 │      │
+  │   └───────────┘ └───────────┘      │
+  └─────────────────────────────────────┘
+  Traffic split: 80% legacy, 20% new
+
+Phase 2: More traffic to new
+  ┌─────────────────────────────────────┐
+  │           API Gateway               │
+  │   ┌───────────┐ ┌───────────┐      │
+  │   │ Legacy    │ │ New       │      │
+  │   │ System    │ │ Services  │      │
+  │   └───────────┘ └───────────┘      │
+  └─────────────────────────────────────┘
+  Traffic split: 40% legacy, 60% new
+
+Phase 3: Legacy retired
+  ┌─────────────────────────────────────┐
+  │           API Gateway               │
+  │   ┌───────────────────────┐        │
+  │   │    New Services       │        │
+  │   └───────────────────────┘        │
+  └─────────────────────────────────────┘
+  Traffic split: 0% legacy, 100% new
+```
+
+### Strangler Fig Steps
+
+```
+1. Identify legacy module to replace
+2. Build new service alongside legacy
+3. Route traffic for that module to new service
+4. Verify new service works correctly
+5. Remove legacy module code
+6. Repeat for next module
+```
+
+## Interview Tips
+
+> "DDD's Bounded Context is the best framework for deciding microservice boundaries. Each bounded context maps to a service."
+
+> "Entities have identity, Value Objects don't. A User is an entity (ID matters). A Money amount is a value object (only values matter)."
+
+> "Aggregates define consistency boundaries. All changes to an aggregate go through the root entity. Keep aggregates small."
+
+> "The Strangler Fig pattern is the safest way to migrate from a monolith to microservices — one piece at a time."
+
+---

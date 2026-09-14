@@ -1,0 +1,136 @@
+---
+title: Interview Cheat Sheet — Stage 5
+---
+
+import { Callout } from 'nextra/components'
+
+# Quick Reference: Stage 5 Decision Framework
+
+## Architecture Choice
+
+```
+Monolith:
+  Team < 20 engineers
+  Domain is simple
+  Need to ship fast
+  Limited DevOps capability
+
+Microservices:
+  Team > 20 engineers
+  Domain has clear bounded contexts
+  Need independent scaling/deployment
+  Dedicated platform team
+
+Serverless:
+  Event-driven workloads
+  Bursty/unpredictable traffic
+  Short-lived functions
+  Small team, limited ops
+
+Modular Monolith:
+  Want monolith simplicity + optionality
+  Planning future extraction
+  Medium team size (10-30)
+```
+
+## Decomposition Strategy
+
+```
+By Business Capability:
+  Clear business alignment
+  Example: User, Order, Payment, Shipping
+
+By Subdomain (DDD):
+  Complex domain with many models
+  Example: Core, Supporting, Generic
+
+By Team:
+  Each team owns 1-3 services
+  Independent deployment needed
+```
+
+## Communication Pattern
+
+```
+Sync (REST/gRPC):
+  Need immediate response
+  User-facing queries
+  Simple request-response
+
+Async (Events/Messages):
+  Don't need immediate response
+  Background processing
+  Multiple consumers
+  Need fault tolerance
+```
+
+## Data Management
+
+```
+Database per Service:
+  Each service owns its data
+  Different storage technologies needed
+  Independent schema evolution
+
+Shared Database:
+  Strong consistency required
+  Simple domain
+  Small scale
+```
+
+---
+
+# Interview Cheat Sheet: Stage 5
+
+## Monolith vs Microservices
+
+- Start monolith, extract when justified
+- Modular monolith = best default
+- Microservices trade simplicity for independence
+- Wrong boundaries are expensive to fix
+
+## Serverless
+
+- Best for event-driven, bursty workloads
+- Cold starts are the main concern for APIs
+- Durable functions solve state management
+- Pay-per-use vs reserved capacity
+
+## Event-Driven
+
+- Choreography: Loose coupling, hard to debug
+- Orchestration: Easy to understand, single point of failure
+- Outbox pattern solves dual-write problem
+- Eventual consistency is the tradeoff
+
+## DDD
+
+- Bounded Context = service boundary
+- Entities have identity, Value Objects don't
+- Aggregates define consistency boundaries
+- Strangler Fig for migration
+
+## Twelve-Factor
+
+- Config in environment variables
+- Stateless processes
+- Treat logs as event streams
+- Dev/Prod parity
+
+## Design Patterns
+
+- Singleton: One instance (database pool)
+- Factory: Create objects (notifications)
+- Strategy: Swap algorithms (pricing)
+- Observer: Event notifications
+- BFF: Separate backends per client
+
+---
+
+*Stage 5 covers architecture patterns — the bridge between individual components and complete systems. These patterns determine how your system is structured, how services communicate, and how teams are organized. Master these before moving to Stage 6: Reliability and Observability.*
+
+---
+
+*Sources: Domain-Driven Design (Eric Evans), Building Microservices (Sam Newman), Serverless Architectures on AWS (Peter Sbarski), The Twelve-Factor App (Adam Wiggins), Microservices Patterns (Chris Richardson), Design Patterns (Gang of Four), ByteByteGo, DesignGurus.io.*
+
+*Last updated: July 06, 2026*

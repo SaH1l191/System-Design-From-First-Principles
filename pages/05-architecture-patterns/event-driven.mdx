@@ -1,0 +1,603 @@
+---
+title: Event-Driven Microservices
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.4 Event-Driven Microservices
+
+> Event-driven microservices communicate through events rather than direct API calls. Services emit events when something happens; other services react to those events. This creates loose coupling and enables independent scaling — but introduces eventual consistency and makes the system harder to reason about.
+
+## What is Event-Driven Architecture?
+
+```
+Traditional (Request-Response):
+  Order Service → calls → Payment Service
+  Order Service → calls → Inventory Service
+  Order Service → calls → Shipping Service
+
+  Order Service must know about ALL other services
+
+Event-Driven:
+  Order Service → publishes "OrderCreated" event
+                    │
+                    ├──→ Payment Service (reacts)
+                    ├──→ Inventory Service (reacts)
+                    └──→ Notification Service (reacts)
+
+  Order Service doesn't know about other services
+  Services react independently
+```
+
+### Events vs Commands
+
+| Aspect | Event | Command |
+| --- | --- | --- |
+| **Naming** | Past tense (OrderCreated, UserRegistered) | Imperative (CreateOrder, RegisterUser) |
+| **Sender intent** | "Something happened" | "Do something" |
+| **Receiver** | Anyone interested (multiple consumers) | Specific service (one consumer) |
+| **Coupling** | Loose (sender doesn't know receivers) | Tight (sender expects specific response) |
+| **Example** | OrderPlaced → many services react | ProcessPayment → payment service responds |
+
+## Event Choreography
+
+### How Choreography Works
+
+```
+Event choreography: Services react to events independently
+
+1. Order Service: Creates order → Publishes "OrderCreated"
+
+2. Payment Service: Listens for "OrderCreated"
+   → Processes payment
+   → Publishes "PaymentProcessed"
+
+3. Inventory Service: Listens for "OrderCreated"
+   → Reserves items
+   → Publishes "InventoryReserved"
+
+4. Shipping Service: Listens for "PaymentProcessed"
+   → Schedules shipment
+   → Publishes "ShipmentScheduled"
+
+Each service acts independently
+No central coordinator
+```
+
+### Choreography Flow
+
+```
+OrderCreated
+    │
+    ├──→ Payment Service ──→ PaymentProcessed
+    │                             │
+    ├──→ Inventory Service ──→ InventoryReserved
+    │                             │
+    └──→ Notification Service     │
+                                 │
+                    ┌────────────┘
+                    ▼
+            Shipping Service ──→ ShipmentScheduled
+                                      │
+                                      ▼
+                              Notification Service
+                              "Your order has shipped!"
+```
+
+### Choreography Pros and Cons
+
+| Aspect | Choreography | Orchestration |
+| --- | --- | --- |
+| **Coupling** | Very loose | Medium (orchestrator knows all) |
+| **Visibility** | Hard to see full flow | Easy to understand |
+| **Single point of failure** | No | Yes (orchestrator) |
+| **Complexity** | Distributed (harder to debug) | Centralized (easier to reason) |
+| **Adding new service** | Easy (subscribe to events) | Requires updating orchestrator |
+| **Error handling** | Complex (compensating events) | Simpler (try/catch in orchestrator) |
+
+## Event Orchestration
+
+### How Orchestration Works
+
+```
+Event orchestration: A central coordinator manages the workflow
+
+Order Orchestrator:
+  1. Call Order Service: Create order
+     → Success: Continue
+     → Failure: Abort
+
+  2. Call Payment Service: Process payment
+     → Success: Continue
+     → Failure: Compensate (cancel order)
+
+  3. Call Inventory Service: Reserve items
+     → Success: Continue
+     → Failure: Compensate (refund payment, cancel order)
+
+  4. Call Shipping Service: Schedule shipment
+     → Success: Complete
+     → Failure: Compensate (release inventory, refund, cancel)
+```
+
+### Orchestration Flow
+
+```
+┌──────────────┐
+│   Orchestrator│
+│  (Saga)       │
+└──────┬───────┘
+       │
+       ├──→ Order Service: Create order
+       │
+       ├──→ Payment Service: Process payment
+       │
+       ├──→ Inventory Service: Reserve items
+       │
+       └──→ Shipping Service: Schedule shipment
+
+Orchestrator manages:
+  - Sequence of steps
+  - Success/failure handling
+  - Compensating transactions
+  - State management
+```
+
+### Orchestration Pros and Cons
+
+**Pros:**
+- Centralized logic (easy to understand)
+- Easy to add new steps
+- Error handling is straightforward
+- Testing is simpler (test orchestrator)
+
+**Cons:**
+- Orchestrator is a single point of failure
+- Orchestrator knows about all services (coupling)
+- Orchestrator can become a bottleneck
+- Orchestrator logic can grow complex
+
+## Saga Pattern in Microservices
+
+### What is a Saga?
+
+A Saga manages distributed transactions by breaking them into local transactions with compensating actions (undo operations) for each step.
+
+```
+Saga: Transfer $100 from Alice to Bob
+
+Normal flow:
+  Step 1: Deduct $100 from Alice → Success
+  Step 2: Add $100 to Bob → Success
+  → Complete!
+
+Failure flow:
+  Step 1: Deduct $100 from Alice → Success
+  Step 2: Add $100 to Bob → FAILS
+  Compensation: Refund $100 to Alice
+  → Rolled back!
+```
+
+### Choreography Saga
+
+```
+Payment Saga (choreography):
+
+1. Order Service: Create order → Publish "OrderCreated"
+
+2. Payment Service: Listen for "OrderCreated"
+   → Process payment → Publish "PaymentProcessed"
+
+3. Inventory Service: Listen for "PaymentProcessed"
+   → Reserve items → Publish "InventoryReserved"
+
+4. If Inventory Service fails:
+   → Publish "InventoryReservationFailed"
+   
+5. Payment Service: Listen for "InventoryReservationFailed"
+   → Refund payment → Publish "PaymentRefunded"
+
+6. Order Service: Listen for "PaymentRefunded"
+   → Cancel order → Publish "OrderCancelled"
+```
+
+### Orchestration Saga
+
+```
+Payment Saga (orchestrator):
+
+Saga Orchestrator:
+  Step 1: Call Order Service → Create order
+  Step 2: Call Payment Service → Process payment
+  Step 3: Call Inventory Service → Reserve items
+  
+  On failure at any step:
+    Compensate previous steps in reverse order
+    
+  Example: Fail at Step 3
+    → Compensate Step 2: Refund payment
+    → Compensate Step 1: Cancel order
+```
+
+### Why Distributed Transactions Are Hard
+
+When you're first building an application, transactions are easy. You have a database and when a customer places an order, you wrap the whole thing in a transaction. Charge their card, reserve the inventory, record a ledger entry for accounting. If any of those writes fails, the database rolls everything back automatically and it's just like nothing happened.
+
+Your database gives you what are called **ACID guarantees**, which basically means two things that matter here:
+
+1. **Atomicity.** Either all three of those writes happen together or none of them do. There's no world where the card gets charged but the inventory doesn't get reserved.
+
+2. **Isolation.** While that transaction is in progress, no other part of your system can see the half-finished state. Another query checking the customer's balance won't see a charge for an order that hasn't fully processed yet.
+
+But when your application grows, you start to get more traffic, more data, more writes, and eventually that single database starts hitting its limits. So you split things up. Maybe you shard the database to spread write load across multiple machines. Or maybe you break up your monolith into microservices where each service now owns its own database.
+
+The result is the same. Your data now lives on multiple independent machines instead of one. And at this point, everything changes. The payment flow that used to be one transaction against one database is now three completely separate operations against three separate databases on three separate machines.
+
+You can't wrap a transaction across these independent databases because they don't know about each other. So if the card charge commits, but then the inventory reservation fails because the item is out of stock, there's no database-level rollback that can undo that charge. It's already committed in a completely different database on a completely different machine.
+
+When you're processing thousands of transactions a second across distributed infrastructure, partial failures like these aren't edge cases. They actually become pretty routine. This whole class of problem is what's called a **distributed transaction**: a single logical operation that needs to span multiple independent databases or services where all the steps need to either succeed together or be cleaned up when something goes wrong.
+
+### Two-Face Commit (2PC)
+
+The textbooks give us two approaches to distributed transactions: Two-Phase Commit and the Saga pattern. In practice, the industry has overwhelmingly chosen one over the other and understanding why will save you a lot of pain.
+
+2PC is the classic academic solution to distributed transactions. The idea is to introduce a new component called a **coordinator** whose entire job is to make sure that all participants in a transaction agree on the outcome before any make their changes permanent.
+
+It works in two phases:
+
+**Phase 1: Prepare Phase**
+
+The coordinator sends a message to every participant asking "can you commit this transaction?" Each participating database then does the actual work:
+
+- It processes the request
+- Durably records the changes so that nothing is lost if it crashes
+- Locks the affected rows so that no other transactions can modify them in the meantime
+- Responds to the coordinator with either "yes, I'm ready to commit" or "no, something went wrong"
+
+If any single participant votes no, the coordinator tells everyone to abort and release their locks. If every participant votes yes, the coordinator moves to phase two.
+
+**Phase 2: Commit Phase**
+
+The coordinator sends a commit message to everyone. Each participant makes its changes permanent and releases those locks, and the transaction is now complete.
+
+What this gives you is **strong consistency** — the same guarantee you had with the single database. Every participant agrees on the outcome before anything is finalized. On paper, this is exactly what you want.
+
+### Why 2PC Fails in Practice
+
+The fundamental problem with 2PC is that it's a **blocking protocol**. And blocking in a distributed system is dangerous because you're now dependent on multiple machines all staying healthy at the same time.
+
+**Scenario: Coordinator crash after votes**
+
+```
+Coordinator collects all three yes votes
+          │
+          ▼
+Coordinator CRASHES (before sending commit decision)
+          │
+          ▼
+Participants are STUCK:
+  - Booking DB: LOCKED, waiting for commit/abort
+  - Inventory DB: LOCKED, waiting for commit/abort
+  - Payment DB: LOCKED, waiting for commit/abort
+
+They can't commit (maybe coordinator was about to say abort)
+They can't abort (maybe other participants already committed)
+
+Every other transaction that needs those locked rows is now BLOCKED too.
+```
+
+**Scenario: Slow participant**
+
+```
+If the ledger service takes 10 seconds to respond to the prepare message,
+the card service and the inventory service are both sitting there with
+their locks held for those full 10 seconds doing nothing.
+
+The entire system moves at the speed of the slowest participant.
+```
+
+**Scenario: Network partition**
+
+```
+If a network partition means the coordinator can't reach a participant,
+there's no safe default. It can't tell whether the message got through or not.
+```
+
+This is why almost nobody uses 2PC across services in production. Pat Helland wrote a really influential paper called "Life Beyond Distributed Transactions" where he argues exactly this point: distributed transactions across autonomous services don't work at internet scale.
+
+**Where 2PC does exist:** 2PC does exist in production but only inside distributed databases like Google Spanner or YugabyteDB where the coordinator and the participants are tightly coupled within the same system. The database handles the complexity internally so that you as the caller don't have to. But across independent services with different deployment schedules and different failure characteristics, that's where it all falls apart.
+
+### The Saga Pattern
+
+When companies need to coordinate work across multiple services, the **saga pattern** is what they reach for. Uber, Netflix, Amazon, DoorDash — they all use this pattern in production.
+
+Sagas start from a very different assumption than 2PC: you don't actually need all-or-nothing atomicity spanning multiple services. You just need a way to eventually get to a consistent state even when things go wrong along the way.
+
+Instead of coordinating one big distributed transaction with locks held across services, you break the work into a chain of independent local transactions. Each service does its piece of work and commits to its own database on its own terms. When something fails further down the chain, there's no way to roll back to earlier steps since they've already been committed to that separate database. So instead you run what is called a **compensating action** — business-level undos that reverse the effects of what already happened. A refund instead of a rollback. A cancellation instead of an abort.
+
+The trade-off is that instead of getting the strong consistency you get with 2PC, Saga gives you what's called **eventual consistency**. The system might be temporarily in an inconsistent state while compensations are running (a customer might briefly see a charge on their card before the refund goes through), but it always converges to a correct state and nothing is blocked while that convergence is happening. Other transactions can keep flowing normally that entire time.
+
+### Saga: Choreography vs Orchestration
+
+There are two ways to implement sagas and the choice between them determines who is responsible for detecting failures and running compensations.
+
+**Choreography (Decentralized)**
+
+Uses a publish-subscribe pattern where each service broadcasts an event when it finishes its work and any interested service can pick it up and react.
+
+```
+1. Card service charges the card → publishes "CardCharged" event
+2. Inventory service listening for that event → reserves stock → publishes "InventoryReserved"
+3. Ledger service picks that up → records the entry
+
+If something fails:
+  → Failure service publishes a failure event
+  → Upstream services react by running their own compensations
+```
+
+Works well for simple flows (2-3 steps). But once you get to 5-6 services all publishing and reacting to each other's events, figuring out the current state of any given transaction becomes really difficult. Where exactly did it fail? Which compensating actions have already run? Did the refund actually go through? Without a central place tracking all of this, you end up digging through logs across a dozen different services trying to piece together what happened.
+
+**Orchestration (Centralized)**
+
+A dedicated orchestrator service controls the entire flow. It tells each service what to do one step at a time.
+
+```
+Orchestrator:
+  1. "Card service, charge the card" → waits for confirmation
+  2. "Inventory service, reserve the stock" → waits for confirmation
+  3. "Ledger service, record the entry"
+
+If something fails:
+  → Orchestrator knows exactly what steps failed
+  → Runs the right compensating action in the right order
+```
+
+Tools like **Temporal** (created by the engineer behind Uber's Cadence workflow engine) or **AWS Step Functions** are purpose-built for exactly this kind of orchestration.
+
+### Why Saga Orchestrator Is Different from 2PC Coordinator
+
+This is one of the key differences. Although both have a "coordinator," Saga orchestration and 2PC lock very different things for very different durations.
+
+**2PC Locking**
+
+In 2PC, participants lock their database resources until the coordinator makes the final decision.
+
+```
+2PC Flow:
+  Booking DB:    LOCK -------------------------------- COMMIT
+  Payment DB:    LOCK -------------------------------- COMMIT
+  Inventory DB:  LOCK -------------------------------- COMMIT
+
+  All resources remain locked while waiting.
+
+If coordinator crashes:
+  Booking row: LOCKED
+  Payment: LOCKED
+  Inventory: LOCKED
+  No one knows whether to commit or rollback.
+  Those locks may remain until recovery, reducing availability.
+```
+
+**Saga Locking**
+
+A Saga does not keep database transactions open across services. Each service starts a local transaction, commits immediately, and releases the database lock.
+
+```
+Saga Flow:
+  Booking DB:    LOCK → COMMIT → UNLOCK
+  Payment DB:    LOCK → COMMIT → UNLOCK
+  Inventory DB:  LOCK → COMMIT → UNLOCK
+
+  Each service locks only during its own local transaction.
+```
+
+**But what about preventing double-booking?**
+
+If Saga doesn't keep the DB transaction open, how do you stop two users from trying to book the same room?
+
+You use **business-level locking**, not transaction locking:
+
+```
+Room 101:
+  status = RESERVED
+  expiresAt = now + 5 min
+
+OR
+
+Redis Redlock:
+  room:101
+  TTL = 5 minutes
+```
+
+This is not a database transaction lock. It's application logic saying "temporarily don't let anyone else reserve this room."
+
+**If Payment Fails:**
+
+```
+2PC:
+  Booking was never committed.
+  Everything rolls back.
+  No booking exists.
+
+Saga:
+  Booking was already committed.
+  Orchestrator sends compensation command:
+    → "Cancel booking"
+  Booking status becomes CANCELLED.
+
+  Notice: nothing was waiting or locked for the entire duration.
+```
+
+**What does the Saga Orchestrator actually "lock"?**
+
+Strictly speaking, it doesn't hold database locks. It tracks workflow state:
+
+```
+Saga 456
+  Step 1: Booking created      ✅
+  Step 2: Payment pending      ⏳
+  Step 3: Email not started    ❌
+
+It stores:
+  - SagaId
+  - BookingId
+  - CurrentStep
+  - Status
+
+That's state management, not resource locking.
+```
+
+People usually say Saga "locks" things, they're referring to **business resource reservation**: room reserved for 5 minutes, seat held for 10 minutes, inventory reserved, payment authorization hold. These are implemented with application state, expiration timestamps, Redis locks, or reservation records — not long-lived database transaction locks.
+
+### Timeline Comparison
+
+```
+2PC:
+Time →
+  Booking DB:    LOCK ---------------------------- COMMIT
+  Payment DB:    LOCK ---------------------------- COMMIT
+  Inventory DB:  LOCK ---------------------------- COMMIT
+  All resources remain locked while waiting.
+
+Saga:
+Time →
+  Booking DB:    LOCK → COMMIT → UNLOCK
+  Payment DB:    LOCK → COMMIT → UNLOCK
+  Email:         Async
+  Each service locks only during its own local transaction.
+```
+
+### Quick Comparison: 2PC vs Saga
+
+| Feature | 2PC | Saga |
+| --- | --- | --- |
+| Holds DB transaction open? | Yes | No |
+| Locks rows across services? | Yes | No |
+| Local DB transaction | Long-lived until global commit | Short-lived (milliseconds) |
+| Coordinator waits for everyone | Yes | No |
+| Failure recovery | Commit/Rollback | Compensation |
+| Consistency | Strong (atomic) | Eventual |
+
+### Transactional Outbox Pattern
+
+Even with solid compensation logic in place, there's one more failure mode that catches teams off guard. When a service finishes its work, it needs to do two things: save the result to its own database AND publish an event to a message broker so that the next service in the chain knows it's time to proceed.
+
+The problem is that those are two completely separate writes to two completely separate systems. This is called the **dual-write problem**:
+
+```
+If DB write succeeds but event publish fails:
+  → Next step in saga never gets triggered
+  → Whole flow stalls
+
+If event publishes successfully but DB write fails:
+  → Downstream services react to something that didn't actually happen
+```
+
+The **transactional outbox pattern** solves this:
+
+```
+Instead of writing to your database and publishing an event as two
+separate operations, you write both your data and the outgoing event
+into the same database via a single local transaction.
+
+BEGIN TRANSACTION
+  INSERT INTO orders (...)
+  INSERT INTO outbox_events (event_type, payload)
+COMMIT
+
+Then a separate background process watches the outbox table and
+publishes those events to your message broker.
+
+That background process can use:
+  - Change Data Capture (tails the database's own transaction logs)
+  - Pull the outbox table on a regular interval
+```
+
+### When to Use What
+
+Before you reach for either pattern, the first question to ask yourself is whether you actually need a distributed transaction at all. If you can design your service boundaries so that the data that transacts together lives in the same database, do that. This is easier to get right up front than to try to retrofit later.
+
+If you genuinely can't avoid distributing the transaction across services, you're going to use a saga. That's not really a debate in the industry anymore. The question is which flavor of saga makes sense for your situation:
+
+- **Choreography**: Usually where teams start. Works great for simple flows (3-4 steps). Services are truly independent and you don't need centralized visibility.
+- **Orchestration**: For anything more complex — branching logic, flows where you need to see exactly where a transaction is stuck, tricky compensation logic defined in one clear place. Most teams end up here.
+
+> **At the end of the day, the pattern that you'll see at most companies operating at scale is: Saga with orchestration, independent operations at every step so the retries are always safe, and a transactional outbox to make sure events are as reliable as database writes. It means accepting eventual consistency, but that's a trade-off the industry has made deliberately. And it's the architecture that Uber, Netflix, and Amazon actually run in production today.**
+
+## Event-Driven Data Consistency
+
+### The Dual-Write Problem
+
+```
+Without proper patterns:
+  1. Write to database (succeeds)
+  2. Publish event to queue (FAILS!)
+  Result: DB has change, event never published
+
+  OR
+  
+  1. Publish event to queue (succeeds)
+  2. Write to database (FAILS!)
+  Result: Event published but no DB change
+```
+
+### Transactional Outbox Pattern
+
+```
+Solution: Write to DB and outbox in single transaction
+
+  BEGIN TRANSACTION
+    INSERT INTO orders (...)
+    INSERT INTO outbox_events (event_type, payload)
+  COMMIT
+
+  Background CDC process:
+    Reads outbox → Publishes to Kafka → Updates read store
+  
+  Guarantees:
+    - DB write and event publication are atomic
+    - No dual-write problem
+    - Eventual consistency (CDC lag)
+```
+
+### Event Sourcing
+
+```
+Traditional: Store current state
+  orders: { id: 123, status: "shipped", total: 100 }
+
+Event Sourcing: Store all events
+  1. OrderCreated {orderId: 123, total: 100}
+  2. PaymentProcessed {orderId: 123, amount: 100}
+  3. InventoryReserved {orderId: 123, items: [...]}
+  4. OrderShipped {orderId: 123, trackingId: "abc"}
+  
+  Current state = replay events 1-4
+```
+
+### CQRS + Event Sourcing
+
+```
+Write Side (Event Sourcing):
+  Commands → Events → Event Store
+                        │
+              ┌─────────┴─────────┐
+              ▼                   ▼
+        Read Model 1          Read Model 2
+        (Elasticsearch)       (Redis cache)
+              │                   │
+              ▼                   ▼
+        Queries (search)    Queries (fast read)
+```
+
+## Interview Tips
+
+> "Event-driven architecture creates loose coupling but introduces eventual consistency. The question is: can your business tolerate a few seconds of inconsistency?"
+
+> "Choreography is simpler for small systems. Orchestration is better for complex workflows where you need visibility and error handling."
+
+> "The Outbox pattern is the standard solution for the dual-write problem. Write to DB + outbox in one transaction, then use CDC to publish events."
+
+> "CQRS separates read and write models. Event Sourcing stores events instead of state. They work well together but are independent patterns."
+
+---

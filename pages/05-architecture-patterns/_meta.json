@@ -1,0 +1,10 @@
+{
+  "index": "Overview",
+  "monolith": "Monolithic Architecture",
+  "microservices": "Microservices",
+  "serverless": "Serverless",
+  "event-driven": "Event-Driven Architecture",
+  "ddd": "Domain-Driven Design",
+  "twelve-factor": "Twelve-Factor App",
+  "cheat-sheet": "Interview Cheat Sheet"
+}

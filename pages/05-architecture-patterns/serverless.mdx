@@ -1,0 +1,350 @@
+---
+title: Serverless Architecture
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.3 Serverless Architecture
+
+> Serverless means you write functions, deploy them, and the cloud provider handles everything else — servers, scaling, patching, availability. The tradeoff: you gain zero operational overhead and pay-per-use pricing, but you inherit cold starts, vendor lock-in, and execution limits. Choose serverless for event-driven, bursty, or infrequent workloads.
+
+## What is Serverless?
+
+```
+Traditional:
+  You manage: Servers, OS, Runtime, Scaling, Patches
+  You write:  Application code
+
+Serverless:
+  Cloud manages: Servers, OS, Runtime, Scaling, Patches
+  You write:     Function code only
+```
+
+**Key characteristics:**
+- No server management
+- Pay per execution (not per hour)
+- Auto-scaling (from 0 to thousands)
+- Event-driven triggers
+- Stateless functions
+- Short-lived (seconds to minutes)
+
+## Function-as-a-Service (FaaS)
+
+### How FaaS Works
+
+```
+Developer writes function:
+  def handler(event, context):
+      user_id = event['user_id']
+      return {"status": "ok", "user": user_id}
+
+Cloud provider:
+  - Deploys function to server
+  - Routes events to function
+  - Manages scaling (0 → 1000 instances)
+  - Charges per invocation + duration
+```
+
+### FaaS Platforms
+
+| Platform | Provider | Language Support | Max Duration |
+| --- | --- | --- | --- |
+| **AWS Lambda** | Amazon | Node.js, Python, Java, Go, .NET, Ruby | 15 minutes |
+| **Azure Functions** | Microsoft | C#, JavaScript, Python, Java, PowerShell | 10 minutes |
+| **Google Cloud Functions** | Google | Node.js, Python, Go, Java, .NET | 9 minutes |
+| **Cloudflare Workers** | Cloudflare | JavaScript, TypeScript, WASM | 30 seconds |
+| **Vercel Functions** | Vercel | Node.js, Go, Python | 10 seconds (Hobby) |
+
+### Lambda Example
+
+```python
+# AWS Lambda function
+import json
+
+def handler(event, context):
+    """
+    Event contains:
+    - HTTP request details
+    - API Gateway metadata
+    - Query parameters
+    - Request body
+    """
+    user_id = event['pathParameters']['user_id']
+    
+    # Business logic
+    user = get_user_from_db(user_id)
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps(user)
+    }
+```
+
+### The Lambda Execution Model
+
+```
+Event arrives → Lambda picks a container → Executes function → Container stays warm (5-15 min)
+
+First invocation:
+  Event → Cold start (1-5 seconds) → Execute → Return
+
+Subsequent invocations (within 5-15 min):
+  Event → Warm container (0-50ms) → Execute → Return
+
+After 15 minutes idle:
+  Event → Cold start again
+```
+
+## Backend-as-a-Service (BaaS)
+
+### What BaaS Provides
+
+```
+BaaS replaces backend infrastructure with managed services:
+
+  Authentication → AWS Cognito / Firebase Auth
+  Database       → Firebase Firestore / AWS DynamoDB
+  Storage        → AWS S3 / Firebase Storage
+  APIs           → AWS API Gateway / Firebase Hosting
+  Push Notifs    → Firebase Cloud Messaging / SNS
+  Search         → Algolia / CloudSearch
+
+Application only contains frontend + business logic
+```
+
+### BaaS vs FaaS
+
+| Aspect | FaaS | BaaS |
+| --- | --- | --- |
+| **What you write** | Backend functions | Frontend + business logic |
+| **Backend infrastructure** | You compose managed services | Provider gives you everything |
+| **Example** | AWS Lambda + DynamoDB + S3 | Firebase Auth + Firestore + Hosting |
+| **Flexibility** | High (you control everything) | Low (use what provider gives) |
+| **Complexity** | Medium | Low |
+
+## Cold Starts and Warm Starts
+
+### The Cold Start Problem
+
+```
+Cold start components:
+  1. Download function code          (100-500ms)
+  2. Start new container             (200-500ms)
+  3. Initialize runtime              (100-500ms)
+  4. Run initialization code         (variable)
+  5. Execute function                (your code)
+
+Total cold start: 500ms - 5 seconds
+```
+
+### Cold Start Mitigations
+
+| Strategy | How It Works | Tradeoff |
+| --- | --- | --- |
+| **Provisioned concurrency** | Pre-warm N instances | Pay for idle capacity |
+| **SnapStart (AWS)** | Snapshot initialized state | Java/JVM only |
+| **Minimize package size** | Smaller deployment artifact | Less dependencies |
+| **Lazy initialization** | Init heavy resources on first call | First call slower |
+| **Keep functions warm** | CloudWatch cron every 5 min | Not guaranteed |
+| **Choose faster languages** | Python/Node.js faster than Java/.NET | Language constraints |
+
+### Warm Start vs Cold Start
+
+```
+Warm start (within 15 min):
+  Response time: 1-50ms overhead
+  
+Cold start:
+  Response time: 500ms-5s overhead
+
+Impact:
+  API endpoint: Cold start = 500ms extra (user notices)
+  Background job: Cold start = irrelevant (no user waiting)
+  Real-time: Cold start = unacceptable
+```
+
+### When Cold Starts Matter
+
+```
+Matters a lot:
+  - API endpoints (user-facing)
+  - Real-time features
+  - Interactive applications
+
+Doesn't matter:
+  - Background jobs
+  - Scheduled tasks
+  - Batch processing
+  - Webhooks
+  - Event-driven workflows
+```
+
+## Event Triggers
+
+### Common Event Sources
+
+```
+HTTP/API Events:
+  API Gateway → Lambda (REST API)
+  ALB → Lambda (Application Load Balancer)
+  CloudFront → Lambda@Edge (CDN events)
+
+Storage Events:
+  S3 → Lambda (file uploaded/deleted)
+  DynamoDB Streams → Lambda (table changes)
+
+Queue Events:
+  SQS → Lambda (message in queue)
+  Kinesis → Lambda (stream records)
+
+Schedule Events:
+  EventBridge → Lambda (cron: every 5 min)
+  CloudWatch Events → Lambda (on event)
+
+Messaging Events:
+  SNS → Lambda (notification published)
+  IoT → Lambda (device message)
+```
+
+### Event-Driven Architecture with Lambda
+
+```
+User uploads photo:
+  1. S3 event → Lambda (resize image)
+  2. S3 event → Lambda (generate thumbnail)
+  3. S3 event → Lambda (extract metadata)
+  4. S3 event → Lambda (update search index)
+
+All happen in parallel, independently
+Each function scales independently
+You pay only for actual execution time
+```
+
+## Stateful Serverless (Durable Functions)
+
+### The Problem with Stateless Functions
+
+```
+Traditional workflow (monolith):
+  def process_order(order):
+      payment = process_payment(order)      # Step 1
+      inventory = reserve_inventory(order)   # Step 2
+      shipping = schedule_shipping(order)    # Step 3
+      notify_user(order)                     # Step 4
+      return order
+
+All steps happen in one function call
+State is held in memory
+If function crashes at step 3, restart from step 1
+```
+
+### Durable Functions / Step Functions
+
+```
+AWS Step Functions:
+  ┌─────────┐
+  │ Process │
+  │ Payment │
+  └────┬────┘
+       │
+  ┌────┴────┐
+  │ Reserve │
+  │Inventory│
+  └────┬────┘
+       │
+  ┌────┴────┐
+  │Schedule │
+  │Shipping │
+  └────┬────┘
+       │
+  ┌────┴────┐
+  │ Notify  │
+  │  User   │
+  └─────────┘
+
+Each step is a Lambda function
+Step Functions manages:
+  - State between steps
+  - Error handling (retry, catch)
+  - Parallel execution
+  - Wait states
+  - Human approval steps
+```
+
+### Durable Functions Platforms
+
+| Platform | Name | Use Case |
+| --- | --- | --- |
+| **AWS** | Step Functions | Complex workflows, orchestrations |
+| **Azure** | Durable Functions | .NET-focused workflows |
+| **Temporal** | Temporal workflows | Long-running, mission-critical |
+| **Cadence** | Cadence (Uber) | High-reliability workflows |
+
+## When to Use Serverless
+
+### Serverless Decision Matrix
+
+| Factor | Serverless Wins | Traditional Wins |
+| --- | --- | --- |
+| **Traffic pattern** | Bursty, unpredictable | Steady, predictable |
+| **Execution frequency** | Infrequent (1M/day is fine) | Constant (high throughput) |
+| **Duration** | Short (&lt; 15 min) | Long-running (&gt; 15 min) |
+| **Latency requirement** | Cold starts acceptable | Cold starts unacceptable |
+| **Vendor lock-in** | OK with provider dependency | Need portability |
+| **Operational team** | Small team | Dedicated DevOps |
+| **Cost sensitivity** | Pay-per-use is better | Reserved capacity is cheaper |
+
+### Serverless Use Cases
+
+```
+Great fit:
+  - REST APIs (API Gateway + Lambda)
+  - Image/video processing (S3 → Lambda)
+  - Scheduled tasks (EventBridge → Lambda)
+  - Webhooks (API Gateway → Lambda)
+  - Chatbots (Lex + Lambda)
+  - IoT data processing (Kinesis → Lambda)
+  - File processing (S3 → Lambda)
+
+Poor fit:
+  - Long-running jobs (> 15 min)
+  - High-throughput streaming (constant load)
+  - Real-time gaming (latency critical)
+  - Legacy applications (hard to refactor)
+  - Applications needing persistent connections (WebSockets)
+```
+
+### Cost Comparison
+
+```
+Example: API with 1M requests/day, 200ms average execution
+
+Lambda:
+  1M requests × 200ms × 128MB = $4.10/month
+
+EC2 (t3.medium):
+  $30/month (24/7, even with zero traffic)
+
+Lambda is cheaper when:
+  - Traffic is bursty (pay only when used)
+  - Traffic is low-to-medium
+  - Functions are short-lived
+
+EC2 is cheaper when:
+  - Traffic is constant and high
+  - Functions run long
+  - Need persistent connections
+```
+
+## Interview Tips
+
+> "Serverless is not免费午餐 — you trade server management for cold starts, vendor lock-in, and execution limits. Choose it for event-driven, bursty workloads."
+
+> "Cold starts are the biggest concern for user-facing APIs. Use provisioned concurrency for critical paths. For background jobs, cold starts don't matter."
+
+> "Durable functions (Step Functions) solve the state management problem in serverless. They are essential for multi-step workflows."
+
+> "The decision is not 'serverless or containers?' — it's 'what is the right tool for this specific workload?' Most real architectures use both."
+
+---

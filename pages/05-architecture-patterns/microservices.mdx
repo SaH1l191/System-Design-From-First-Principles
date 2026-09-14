@@ -1,0 +1,507 @@
+---
+title: Microservices Architecture
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.2 Microservices Architecture
+
+> Microservices decompose a system into small, independently deployable services, each owning its own data and logic. The tradeoff: you gain independence, scalability, and team autonomy — but you inherit distributed systems complexity (network failures, data consistency, operational overhead). Choose microservices when your team and domain justify the cost.
+
+## What are Microservices?
+
+```
+Microservices Architecture:
+┌─────────────────────────────────────────────────────────┐
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
+│  │  User    │  │  Order   │  │ Payment  │            │
+│  │ Service  │  │ Service  │  │ Service  │            │
+│  │          │  │          │  │          │            │
+│  │ [DB:User]│  │ [DB:Order]│ │[DB:Pay] │            │
+│  └─────┬────┘  └─────┬────┘  └─────┬────┘            │
+│        │             │             │                   │
+│        └─────────────┼─────────────┘                   │
+│                      │                                 │
+│              ┌───────┴───────┐                         │
+│              │  API Gateway  │                         │
+│              └───────┬───────┘                         │
+│                      │                                 │
+│               ┌──────┴──────┐                          │
+│               │   Clients   │                          │
+│               └─────────────┘                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Key principles:**
+- Each service is independently deployable
+- Each service owns its own database (no shared DB)
+- Services communicate over the network (APIs or messages)
+- Each service is organized around a business capability
+- Decentralized data management
+
+## Service Decomposition
+
+### How to Split a Monolith into Services
+
+The hardest part of microservices is not building them — it's deciding where to draw the boundaries.
+
+### Decomposition Strategies
+
+**1. By Business Capability**
+
+```
+E-commerce system:
+  User Service      → Account management, profiles
+  Product Service   → Catalog, search, inventory
+  Order Service     → Cart, checkout, order history
+  Payment Service   → Payments, refunds, billing
+  Shipping Service  → Tracking, delivery, logistics
+  Notification Service → Email, SMS, push notifications
+```
+
+**2. By Subdomain (DDD approach)**
+
+```
+DDD Subdomains:
+  Core Domain:     Order processing (your competitive advantage)
+  Supporting:      User management (necessary but not differentiating)
+  Generic:         Email notifications (buy or use SaaS)
+```
+
+**3. By Team Ownership**
+
+```
+Team Alpha → User Service + Auth Service
+Team Beta  → Order Service + Payment Service
+Team Gamma → Product Service + Search Service
+
+One team = one or more services
+Each team deploys independently
+```
+
+### The Monolith Decomposition Decision Tree
+
+```
+Should this module be a separate service?
+
+├── Does it need independent scaling?
+│   └── YES → Extract to service
+│
+├── Does a different team own it?
+│   └── YES → Extract to service
+│
+├── Does it have different data storage needs?
+│   └── YES → Extract to service (different DB type)
+│
+├── Does it need different deployment frequency?
+│   └── YES → Extract to service
+│
+├── Does it have different technology requirements?
+│   └── YES → Extract to service
+│
+└── None of the above
+    └── Keep in monolith (or modular monolith)
+```
+
+## Bounded Context (DDD)
+
+A Bounded Context defines the boundary within which a particular domain model applies. It answers: "What does this service know about, and what does it NOT know about?"
+
+### Bounded Context Example
+
+```
+E-commerce domain:
+  ┌──────────────────────────────────────────┐
+  │           ORDER BOUNDED CONTEXT          │
+  │                                          │
+  │  Order                                   │
+  │    ├── OrderItem (list of items)         │
+  │    ├── OrderStatus                       │
+  │    ├── TotalAmount                       │
+  │    └── ShippingAddress                   │
+  │                                          │
+  │  Knows about:                            │
+  │    - Product (ID + Name + Price only)    │
+  │    - Customer (ID + Name only)           │
+  │                                          │
+  │  Does NOT know about:                    │
+  │    - Product inventory details           │
+  │    - Customer payment methods            │
+  │    - Shipping carrier details            │
+  └──────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────┐
+  │          PAYMENT BOUNDED CONTEXT         │
+  │                                          │
+  │  Payment                                 │
+  │    ├── PaymentMethod                     │
+  │    ├── Amount                            │
+  │    ├── Status                            │
+  │    └── TransactionId                     │
+  │                                          │
+  │  Knows about:                            │
+  │    - Order (ID + TotalAmount only)       │
+  │    - Customer (ID + PaymentMethods)      │
+  │                                          │
+  │  Does NOT know about:                    │
+  │    - Order items                         │
+  │    - Shipping details                    │
+  │    - Product details                     │
+  └──────────────────────────────────────────┘
+```
+
+### Bounded Context Map
+
+```
+Context Map shows relationships between bounded contexts:
+
+  User Context ←──ACL──→ Order Context
+                        │
+                        │Published Language
+                        ▼
+                   Payment Context
+                        │
+                        │Published Language
+                        ▼
+                   Shipping Context
+
+ACL = Anti-Corruption Layer
+Published Language = Well-defined API contract
+```
+
+## API Communication (Sync vs Async)
+
+### Synchronous Communication
+
+```
+Request-Response pattern:
+
+Client → Service A → Service B → Service C
+Client ← Service A ← Service B ← Service C
+
+Pros: Simple, immediate response, easy to reason about
+Cons: Tight coupling, cascading failures, latency = sum of all services
+```
+
+### Asynchronous Communication
+
+```
+Event-driven pattern:
+
+Service A → Message Queue → Service B
+Service A → Message Queue → Service C
+
+Pros: Loose coupling, fault tolerance, better scaling
+Cons: Eventual consistency, harder to debug, more infrastructure
+```
+
+### Sync vs Async Comparison
+
+| Aspect | Synchronous | Asynchronous |
+| --- | --- | --- |
+| **Coupling** | Tight (service must be available) | Loose (queue buffers) |
+| **Latency** | Sum of all service latencies | Independent of other services |
+| **Fault tolerance** | Cascading failures | Isolated failures |
+| **Complexity** | Simple | Complex (events, eventual consistency) |
+| **Use case** | User-facing queries, real-time data | Background processing, notifications, analytics |
+| **Data consistency** | Strong (immediate) | Eventual |
+
+### Communication Pattern Decision
+
+```
+Do you need an immediate response?
+├── YES → Synchronous (REST, gRPC)
+│         Use for: User queries, search, real-time data
+│
+└── NO → Asynchronous (Message Queue, Events)
+          Use for: Notifications, analytics, background jobs
+```
+
+## Data Management per Service
+
+### The Database-per-Service Pattern
+
+```
+Microservices data principle: Each service owns its database.
+
+┌──────────┐      ┌──────────┐      ┌──────────┐
+│ User     │      │ Order    │      │ Payment  │
+│ Service  │      │ Service  │      │ Service  │
+└────┬─────┘      └────┬─────┘      └────┬─────┘
+     │                 │                 │
+┌────┴─────┐      ┌────┴─────┐      ┌────┴─────┐
+│ users_db │      │orders_db │      │payments_db│
+│(PostgreSQL)│    │(MongoDB) │      │(PostgreSQL)│
+└──────────┘      └──────────┘      └──────────┘
+
+Each service:
+  - Owns its database exclusively
+  - No other service can directly access it
+  - Chooses the best database technology for its needs
+  - Manages its own schema and migrations
+```
+
+### Cross-Service Data Queries
+
+The challenge: what happens when you need data from multiple services?
+
+**Option 1: API Composition**
+
+```
+GetOrderDetails(orderId):
+  order = OrderService.getOrder(orderId)      // Synchronous
+  customer = UserService.getCustomer(order.customerId)  // Synchronous
+  payment = PaymentService.getPayment(order.paymentId)  // Synchronous
+  
+  return { order, customer, payment }
+```
+
+**Option 2: CQRS + Event Sourcing**
+
+```
+Order Service                    Read Store
+     │                               │
+     │ OrderCreated event            │
+     ├──────────────────────────────>│
+     │                               │ → Updated order view
+     │ OrderPaid event               │   with all data
+     ├──────────────────────────────>│
+     │                               │ → Updated order view
+```
+
+**Option 3: Data Replication**
+
+```
+Order Service                    User Service
+     │                               │
+     │ UserCreated event             │
+     │ (contains minimal user data)  │
+     ├──────────────────────────────>│
+     │                               │ → Local copy of
+     │                               │   user_id + name
+```
+
+### Saga Pattern for Distributed Transactions
+
+```
+Order Saga (Orchestration):
+
+Step 1: OrderService.createOrder()
+  → Order created with status PENDING
+
+Step 2: PaymentService.processPayment()
+  → Payment processed
+  → If fails: OrderService.cancelOrder()
+
+Step 3: InventoryService.reserveItems()
+  → Items reserved
+  → If fails: PaymentService.refundPayment()
+              OrderService.cancelOrder()
+
+Step 4: OrderService.confirmOrder()
+  → Order status = CONFIRMED
+```
+
+## Service Mesh
+
+A service mesh handles inter-service communication transparently, providing load balancing, encryption, observability, and circuit breaking without changing application code.
+
+```
+Without Service Mesh:
+┌──────────────────────────────────────┐
+│ Application Code                     │
+│   ├── Business logic                │
+│   ├── HTTP client code              │
+│   ├── Load balancing logic          │
+│   ├── Retry logic                   │
+│   ├── Circuit breaker logic         │
+│   ├── TLS certificate management    │
+│   └── Metrics collection            │
+└──────────────────────────────────────┘
+  Application handles everything
+
+With Service Mesh:
+┌──────────────────────────────────────┐
+│ Application Code                     │
+│   └── Business logic ONLY           │
+└──────────────────────────────────────┘
+         ↕ (transparent proxy)
+┌──────────────────────────────────────┐
+│ Service Mesh (Envoy sidecar)         │
+│   ├── Load balancing                 │
+│   ├── Retries                        │
+│   ├── Circuit breaking               │
+│   ├── mTLS encryption                │
+│   ├── Observability (metrics, traces)│
+│   └── Traffic management             │
+└──────────────────────────────────────┘
+```
+
+### Popular Service Meshes
+
+| Mesh | Control Plane | Data Plane | Use Case |
+| --- | --- | --- | --- |
+| **Istio** | Istiod | Envoy | Feature-rich, enterprise |
+| **Linkerd** | Linkerd2-proxy | Linkerd2-proxy | Lightweight, simple |
+| **Consul Connect** | Consul | Envoy | Multi-datacenter, Consul ecosystem |
+| **AWS App Mesh** | AWS-managed | Envoy | AWS-native |
+
+### Service Mesh Tradeoffs
+
+**Pros:**
+- Consistent networking policies across all services
+- Observability without code changes
+- mTLS encryption for all traffic
+- Traffic management (canary, A/B testing)
+
+**Cons:**
+- Added latency (sidecar proxy adds 1-3ms per hop)
+- Operational complexity (managing the mesh)
+- Resource overhead (sidecar uses CPU/memory)
+- Debugging difficulty (extra network hop)
+
+## Sidecar Pattern
+
+The sidecar pattern deploys a helper process alongside the main application, sharing the same lifecycle.
+
+```
+Kubernetes Pod:
+┌─────────────────────────────────────┐
+│                                     │
+│  ┌─────────────┐  ┌─────────────┐ │
+│  │ Application │  │   Sidecar   │ │
+│  │   Container │  │  Container  │ │
+│  │             │  │             │ │
+│  │ Business    │  │ - Proxy     │ │
+│  │ Logic       │  │ - Logging   │ │
+│  │             │  │ - Monitoring│ │
+│  └──────┬──────┘  └──────┬──────┘ │
+│         └────────┬───────┘         │
+│            Shared localhost         │
+│            Shared network           │
+└─────────────────────────────────────┘
+```
+
+**Common sidecar use cases:**
+- Envoy proxy (service mesh)
+- Fluentd/Fluent Bit (log shipping)
+- Prometheus exporter (metrics collection)
+- Vault agent (secrets injection)
+- Ambassador (API gateway per pod)
+
+## Configuration Management
+
+### Centralized Configuration
+
+```
+Config Server (etcd, Consul, Spring Cloud Config)
+  │
+  ├── /services/user-service/config
+  │     ├── db_host: user-db.internal
+  │     ├── cache_ttl: 300
+  │     └── feature_flags:
+  │           └── new_registration: true
+  │
+  ├── /services/order-service/config
+  │     ├── db_host: order-db.internal
+  │     ├── payment_timeout: 30
+  │     └── retry_count: 3
+  │
+  └── /secrets/user-service
+        └── db_password: (encrypted)
+```
+
+### Dynamic Configuration
+
+```
+Push-based (preferred):
+  Config Server → pushes change → Service updates immediately
+
+Pull-based:
+  Service → polls Config Server every 30s → applies changes
+
+Hybrid (best):
+  Service loads config on startup (pull)
+  Config Server pushes updates when they happen
+```
+
+### Feature Flags
+
+```
+Feature Flag Service:
+  dark_mode: true          → Everyone sees dark mode
+  new_checkout: 10%        → 10% of users see new checkout
+  beta_api: team=backend   → Only backend team sees beta API
+
+Application:
+  if featureFlags.isEnabled("dark_mode"):
+      showDarkMode()
+  else:
+      showLightMode()
+```
+
+## Distributed Tracing
+
+### The Problem
+
+A single user request may touch 10+ services. How do you trace the full request path?
+
+```
+User Request → API Gateway → User Service → Order Service → Payment Service → Database
+                  │              │              │              │
+                  ↓              ↓              ↓              ↓
+              Trace ID: abc-123
+              
+Each service logs with same Trace ID
+Trace shows full request journey and timing
+```
+
+### How Distributed Tracing Works
+
+```
+Trace = Collection of spans (one per service)
+
+Trace ID: abc-123
+├── Span 1: API Gateway (5ms)
+│   └── Span 2: User Service (15ms)
+│       └── Span 3: Database query (8ms)
+│       └── Span 4: Order Service (20ms)
+│           └── Span 5: Payment Service (50ms)
+│               └── Span 6: Stripe API call (200ms)
+│           └── Span 7: Inventory Service (10ms)
+│               └── Span 8: Database update (5ms)
+```
+
+### Tools
+
+| Tool | Type | Use Case |
+| --- | --- | --- |
+| **Jaeger** | Open source | General-purpose tracing |
+| **Zipkin** | Open source | Twitter-originated, simple setup |
+| **OpenTelemetry** | Vendor-neutral SDK | Instrumentation standard |
+| **AWS X-Ray** | Managed | AWS-native |
+| **Datadog APM** | Managed | Full observability platform |
+
+### Context Propagation
+
+```
+Request Header:
+  traceparent: 00-abc123-def456-01
+
+Services extract traceparent from header
+Each service creates its own span
+Span includes: trace_id, parent_span_id, start_time, duration
+```
+
+## Interview Tips
+
+> "Microservices are not免费午餐 — they trade deployment independence for distributed systems complexity. Choose them when your team size and domain complexity justify the cost."
+
+> "The hardest part of microservices is not building them — it is deciding where to draw the boundaries. Bounded Context from DDD is the best framework for this."
+
+> "Database-per-service is the golden rule of microservices. Shared databases create tight coupling that defeats the purpose."
+
+> "Start with a modular monolith. Extract services only when you have a clear reason: independent scaling, different technology, or team autonomy."
+
+---

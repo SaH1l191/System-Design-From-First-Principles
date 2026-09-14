@@ -1,0 +1,217 @@
+---
+title: Twelve-Factor App
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.6 Twelve-Factor App
+
+> The Twelve-Factor App is a methodology for building software-as-a-service (SaaS) apps that are portable, resilient, and suitable for modern cloud platforms. It's a checklist of best practices, not a rigid set of rules.
+
+## The Twelve Factors
+
+### Factor 1: Codebase
+
+```
+One codebase tracked in revision control, many deploys.
+
+✅ Good:
+  One repository → Many deployments (dev, staging, prod)
+
+❌ Bad:
+  Multiple repositories for same app
+  Sharing code between apps via copy-paste
+```
+
+### Factor 2: Dependencies
+
+```
+Explicitly declare and isolate dependencies.
+
+✅ Good:
+  package.json / requirements.txt / pom.xml
+  Clean install from dependency declaration
+  No system-wide packages
+
+❌ Bad:
+  "It works on my machine"
+  Assuming system packages are installed
+  No dependency lock file
+```
+
+### Factor 3: Config
+
+```
+Store config in the environment.
+
+✅ Good:
+  DATABASE_URL=postgres://...
+  API_KEY=sk-...
+  Environment variables for all config
+
+❌ Bad:
+  Config files committed to repository
+  Hardcoded values in source code
+  Different configs per environment in files
+```
+
+### Factor 4: Backing Services
+
+```
+Treat backing services as attached resources.
+
+✅ Good:
+  Database, cache, queue are attached resources
+  Swap database from PostgreSQL to MySQL by changing URL
+  No code changes needed
+
+❌ Bad:
+  Database-specific code mixed with business logic
+  Hardcoded service URLs
+```
+
+### Factor 5: Build, Release, Run
+
+```
+Strictly separate build and run stages.
+
+  Build:  Code + dependencies → Build artifact
+  Release: Build artifact + config → Release
+  Run:    Release → Running process
+
+Each release gets unique ID (timestamp, hash)
+Rollback = run previous release
+```
+
+### Factor 6: Processes
+
+```
+Execute the app as one or more stateless processes.
+
+✅ Good:
+  Processes are stateless
+  State stored in backing services (DB, cache)
+  Any process can handle any request
+
+❌ Bad:
+  Session state in process memory
+  File-based session storage on same server
+  Sticky sessions required
+```
+
+### Factor 7: Port Binding
+
+```
+Export services via port binding.
+
+  App is self-contained
+  HTTP server runs inside the app
+  No external web server needed (no Apache/Nginx)
+  
+  Example: Node.js app includes Express server
+  Run: node server.js → Listens on port 3000
+```
+
+### Factor 8: Concurrency
+
+```
+Scale out via the process model.
+
+  Processes are first-class citizens
+  Scale by adding more processes
+  Different process types for different workloads
+  
+  Example:
+    Web process: Handle HTTP requests
+    Worker process: Handle background jobs
+    Scheduler process: Run cron tasks
+```
+
+### Factor 9: Disposability
+
+```
+Maximize robustness with fast startup and graceful shutdown.
+
+  Fast startup: New instance ready in seconds
+  Graceful shutdown: Finish in-flight requests, then stop
+  Crash recovery: Process manager restarts crashed processes
+  
+  SIGTERM → Stop accepting new requests
+           → Finish current requests
+           → Exit
+```
+
+### Factor 10: Dev/Prod Parity
+
+```
+Keep development, staging, and production as similar as possible.
+
+  Time parity: Deploy frequently (not months apart)
+  Personnel parity: Same people develop and operate
+  Tool parity: Same tools in all environments
+  
+  Deploy cycle:
+    1 year gap → High risk (things changed too much)
+    1 week gap → Low risk (small changes)
+    1 hour gap → Minimal risk (continuous deployment)
+```
+
+### Factor 11: Logs
+
+```
+Treat logs as event streams.
+
+  App writes logs to stdout/stderr
+  Never manage log files
+  Deployment platform handles log routing
+  
+  Good:
+    console.log("Order created", { orderId: 123 })
+    → Platform captures, routes, stores logs
+
+  Bad:
+    Writing to /var/log/app.log
+    Managing log rotation
+    Custom logging framework
+```
+
+### Factor 12: Admin Processes
+
+```
+Run admin/management tasks as one-off processes.
+
+  Database migrations: Run as one-off process
+  Data fixes: Run as one-off process
+  REPL/Console: Run as one-off process
+  
+  Example:
+    heroku run python manage.py migrate
+    kubectl exec -it pod -- /app/manage.py shell
+```
+
+## Twelve-Factor Summary
+
+| Factor | Key Idea | Implementation |
+| --- | --- | --- |
+| **1. Codebase** | One repo, many deploys | Git repository |
+| **2. Dependencies** | Explicit, isolated | package.json, requirements.txt |
+| **3. Config** | Environment variables | DATABASE_URL, API_KEY |
+| **4. Backing Services** | Attached resources | Database as URL |
+| **5. Build/Release/Run** | Strict separation | CI/CD pipeline |
+| **6. Processes** | Stateless | Store state in DB/cache |
+| **7. Port Binding** | Self-contained | HTTP server in app |
+| **8. Concurrency** | Process model | Scale via processes |
+| **9. Disposability** | Fast start, graceful stop | Health checks, SIGTERM |
+| **10. Dev/Prod Parity** | Keep environments similar | Same tools, frequent deploys |
+| **11. Logs** | Event streams | stdout/stderr |
+| **12. Admin** | One-off processes | Run scripts in containers |
+
+## Interview Tips
+
+> "Twelve-Factor App is the gold standard for cloud-native applications. Every factor solves a specific operational problem."
+
+> "Factor 3 (Config) is the most commonly violated. Never commit config to source control — use environment variables."
+
+> "Factor 6 (Stateless processes) is critical for horizontal scaling. If your process holds state, you cannot scale it easily."
+
+---

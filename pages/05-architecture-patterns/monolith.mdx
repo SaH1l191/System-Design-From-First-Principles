@@ -1,0 +1,300 @@
+---
+title: Monolithic Architecture
+---
+
+import { Callout } from 'nextra/components'
+
+# 5.1 Monolithic Architecture
+
+> A monolithic architecture is the simplest and oldest way to build software: everything lives in one deployable unit. It's not a bad word — it's a valid architectural choice with clear tradeoffs. The key question is not "monolith vs microservices?" but "what is the right architecture for your team, scale, and domain complexity?"
+
+## What is a Monolith?
+
+```
+┌─────────────────────────────────────────┐
+│              MONOLITH                    │
+│                                         │
+│  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐  │
+│  │ User │ │Order │ │Payment│ │Notify│  │
+│  │Module│ │Module│ │Module │ │Module│  │
+│  └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘  │
+│     └────────┴────────┴────────┘       │
+│              │                          │
+│         ┌────┴────┐                     │
+│         │ Database│                     │
+│         └─────────┘                     │
+│                                         │
+│         One deployment unit             │
+│         One codebase                    │
+│         One process                     │
+└─────────────────────────────────────────┘
+```
+
+**Definition:** A monolithic architecture is one where all application components (UI, business logic, data access, integrations) are built, deployed, and scaled as a single unit.
+
+**Key characteristics:**
+- Single codebase (single repository)
+- Single deployment artifact (JAR, WAR, Docker image)
+- All modules share the same database
+- Inter-module calls are in-process (method calls, not network calls)
+- One process running on one or more servers
+
+## Single Deployable Unit
+
+### How Monoliths Work in Practice
+
+```
+Client Request
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│              MONOLITH                    │
+│                                         │
+│  ┌──────────┐    ┌──────────┐          │
+│  │Controller│───>│  Service  │          │
+│  └──────────┘    └────┬─────┘          │
+│                       │                 │
+│              ┌────────┼────────┐       │
+│              ▼        ▼        ▼       │
+│         ┌───────┐ ┌──────┐ ┌──────┐  │
+│         │ User  │ │Order │ │Payment│  │
+│         │Module │ │Module│ │Module │  │
+│         └───┬───┘ └──┬───┘ └──┬───┘  │
+│             └────────┴────────┘       │
+│                    │                   │
+│               ┌────┴────┐              │
+│               │ Database│              │
+│               └─────────┘              │
+└─────────────────────────────────────────┘
+```
+
+**Deployment flow:**
+1. Developer pushes code to repository
+2. CI pipeline builds the entire application
+3. One artifact is deployed to all servers
+4. Load balancer distributes requests across instances
+
+### The Java Spring Boot Example
+
+```
+Spring Boot Application
+├── src/main/java/
+│   ├── controller/
+│   │   ├── UserController.java
+│   │   ├── OrderController.java
+│   │   └── PaymentController.java
+│   ├── service/
+│   │   ├── UserService.java
+│   │   ├── OrderService.java
+│   │   └── PaymentService.java
+│   ├── repository/
+│   │   ├── UserRepository.java
+│   │   ├── OrderRepository.java
+│   │   └── PaymentRepository.java
+│   └── model/
+│       ├── User.java
+│       ├── Order.java
+│       └── Payment.java
+└── application.properties
+
+One JAR file → One deployment → One process
+```
+
+### The Docker Monolith
+
+```dockerfile
+# Single Dockerfile for everything
+FROM node:18
+WORKDIR /app
+COPY . .
+RUN npm install
+CMD ["node", "server.js"]
+```
+
+One container = one deployment = all modules inside
+
+## Tight Coupling
+
+### Why Monoliths Get Tangled
+
+```
+Clean Monolith (start):
+┌────────┐ ┌────────┐ ┌────────┐
+│ User   │ │ Order  │ │Payment │
+│Module  │ │Module  │ │Module  │
+└────────┘ └────────┘ └────────┘
+  No dependencies between modules
+
+After 2 years:
+┌────────┐ ┌────────┐ ┌────────┐
+│ User   │←→│ Order  │←→│Payment │
+│Module  │ │Module  │ │Module  │
+└────┬───┘ └───┬────┘ └────┬───┘
+     └─────────┴───────────┘
+       Tangled dependencies
+```
+
+### Signs of a Tangled Monolith
+
+| Symptom | What It Looks Like |
+| --- | --- |
+| **Change ripple effect** | Fixing a bug in User module breaks Order module |
+| **Slow builds** | Build takes 30+ minutes because everything compiles together |
+| **Merge conflicts** | 5 developers touching same files, constant conflicts |
+| **Cannot deploy independently** | Must deploy all modules even if only one changed |
+| **Fear of refactoring** | "Don't touch that code, we don't know what breaks" |
+| **Large team coordination** | 20+ developers stepping on each other's toes |
+
+### The Cost of Tangled Coupling
+
+```
+Tight coupling impact:
+  Deploy frequency: 1x per week (must coordinate everyone)
+  Build time: 30 minutes (all modules compile together)
+  Test time: 2 hours (all tests run together)
+  Bug impact: Fixing module A breaks module B
+  Team velocity: 5 developers = same velocity as 3
+
+Loose coupling impact:
+  Deploy frequency: 10x per day (each module independent)
+  Build time: 5 minutes (only changed module)
+  Test time: 10 minutes (module-specific tests)
+  Bug impact: Fix isolated to one module
+  Team velocity: 5 developers = 5x velocity
+```
+
+## When to Use Monolith
+
+### The Monolith Decision Matrix
+
+| Factor | Monolith Wins | Microservices Win |
+| --- | --- | --- |
+| **Team size** | &lt; 20 engineers | &gt; 20 engineers |
+| **Domain complexity** | Simple, well-understood | Complex, many bounded contexts |
+| **Scale** | &lt; 100k requests/sec | &gt; 100k requests/sec |
+| **Deployment needs** | Deploy all at once | Independent deployments |
+| **Operational maturity** | Small team, limited DevOps | Dedicated platform team |
+| **Time to market** | Need to ship fast | Can invest in infrastructure |
+
+### The Startup Journey
+
+```
+Phase 1: MVP (Monolith)
+  → Ship fast, validate idea
+  → 3 developers, 3 months to launch
+  → Monolith is the RIGHT choice
+
+Phase 2: Growth (Monolith + Optimizations)
+  → 10 developers, 100k users
+  → Optimize hot paths, add caching
+  → Still monolith is FINE
+
+Phase 3: Scale (Consider Breaking Up)
+  → 50 developers, 1M+ users
+  → Specific modules need independent scaling
+  → Start extracting services
+
+Phase 4: Platform (Microservices)
+  → 200+ developers, 10M+ users
+  → Many teams, many services
+  → Full microservices architecture
+```
+
+## Modular Monolith
+
+### The Best of Both Worlds
+
+A modular monolith keeps the simplicity of a monolith while organizing code into well-separated modules with explicit boundaries.
+
+```
+Modular Monolith:
+┌─────────────────────────────────────────┐
+│              MONOLITH                    │
+│                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐│
+│  │  USER   │  │  ORDER  │  │ PAYMENT ││
+│  │ MODULE  │  │ MODULE  │  │ MODULE  ││
+│  │         │  │         │  │         ││
+│  │ Public  │  │ Public  │  │ Public  ││
+│  │  API    │  │  API    │  │  API    ││
+│  └────┬────┘  └────┬────┘  └────┬────┘│
+│       │            │            │      │
+│  ┌────┴────┐  ┌────┴────┐  ┌───┴────┐│
+│  │Internal │  │Internal │  │Internal ││
+│  │  Impl   │  │  Impl   │  │  Impl   ││
+│  └─────────┘  └─────────┘  └─────────┘│
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │      Shared Infrastructure      │   │
+│  │   (Database, Cache, Queues)     │   │
+│  └─────────────────────────────────┘   │
+└─────────────────────────────────────────┘
+```
+
+### Module Boundaries
+
+```
+Module structure:
+  user/
+    public/
+      UserService.java        (interface)
+      CreateUserRequest.java  (DTO)
+    internal/
+      UserRepository.java     (implementation)
+      UserValidator.java      (internal logic)
+    tests/
+      UserServiceTest.java
+
+  order/
+    public/
+      OrderService.java
+      CreateOrderRequest.java
+    internal/
+      OrderRepository.java
+      OrderValidator.java
+
+Rule: Order module can only import from user/public, NOT user/internal
+```
+
+### Benefits of Modular Monolith
+
+| Aspect | Regular Monolith | Modular Monolith |
+| --- | --- | --- |
+| **Code organization** | Flat, tangled | Clear module boundaries |
+| **Deploy** | All at once | All at once (but module boundaries preserved) |
+| **Testability** | Integration tests across everything | Module-level tests possible |
+| **Extractability** | Hard to extract services | Easy to extract a module into a service |
+| **Team autonomy** | Everyone touches everything | Teams own specific modules |
+| **Build time** | 30+ minutes | 5-10 minutes (with module builds) |
+
+### From Modular Monolith to Microservices
+
+```
+Modular Monolith → Microservices
+
+Step 1: Modular Monolith
+  All modules in one deployment
+  Clear module boundaries
+  Teams own specific modules
+
+Step 2: Extract First Service
+  Pick the most independent module (e.g., Notification)
+  Move to its own process
+  Communicate via API
+
+Step 3: Continue Extracting
+  One module at a time
+  Each extraction is low-risk (proven boundary)
+
+Result: Gradual migration, not a big-bang rewrite
+```
+
+## Interview Tips
+
+> "Monoliths are not bad — they are the right starting point for most projects. The question is not 'monolith vs microservices?' but 'what is the right architecture for your current scale and team?'"
+
+> "The modular monolith gives you the simplicity of a monolith with the optionality of microservices. It is the best default for most teams."
+
+> "Most successful microservices architectures started as monoliths and extracted services gradually. Netflix, Amazon, and Uber all started as monoliths."
+
+---
