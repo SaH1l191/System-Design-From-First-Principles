@@ -1,0 +1,167 @@
+---
+title: Decision Frameworks & Tradeoff Matrices
+---
+
+import { Callout } from 'nextra/components'
+
+# Decision Frameworks & Tradeoff Matrices
+
+> A system design interview is rarely testing whether you know what a cache is. It's testing whether you can look at a set of constraints — read/write ratio, consistency requirements, team size, latency budget — and pick the right tool, then defend *why*. This chapter collects the recurring decisions and gives you a repeatable way to reason through each one, instead of memorizing "the answer."
+
+Every other chapter on this site dives deep into one mechanism. This one is different: it's a map of the *decision points* themselves — the moments in a design where you have to choose a direction and justify it out loud.
+
+---
+
+## The Meta-Framework
+
+Before any specific tradeoff, run every decision through the same four questions:
+
+1. **What does this optimize for, and what does it cost?** Every technique trades one property for another — there is no free scaling.
+2. **What's the failure mode if I'm wrong?** Some wrong choices are cheap to reverse (a cache TTL), others are catastrophic (a shard key).
+3. **What's the simplest thing that satisfies today's requirements?** You can almost always add complexity later; removing it is much harder.
+4. **Would this decision still make sense at 10x scale? At 100x?** Not to over-engineer for 100x, but to know where the seams are so you can cut there later.
+
+```
+              ┌───────────────────────────┐
+              │   New design decision      │
+              └─────────────┬─────────────┘
+                             ▼
+        1. What does it optimize for, what does it cost?
+                             ▼
+        2. What's the failure mode if this choice is wrong?
+                             ▼
+        3. What's the simplest thing that meets today's needs?
+                             ▼
+        4. Does it still hold at 10x / 100x scale?
+                             ▼
+              ┌───────────────────────────┐
+              │  "It depends on X: if X,   │
+              │   A; if not-X, B" — stated │
+              │   out loud, with the cost  │
+              └───────────────────────────┘
+```
+
+<Callout type="info">
+**Interview framing:** when asked "which would you use?", the strongest answer is never a flat pick — it's "it depends on X, and here's how: if X, then A; if not-X, then B." That single sentence usually earns more credit than either A or B in isolation.
+</Callout>
+
+---
+
+## SQL vs NoSQL
+
+| Dimension | SQL (Relational) | NoSQL |
+|---|---|---|
+| Schema | Fixed, enforced at write time | Flexible, enforced (if at all) at read time |
+| Relationships | First-class via joins & foreign keys | Denormalized; relationships modeled in the app |
+| Consistency | Strong (ACID) by default | Tunable — often eventual |
+| Scaling | Vertical first, sharding is hard | Horizontal by design (most variants) |
+| Query flexibility | Ad-hoc queries via SQL | Query patterns must be known upfront |
+| Best for | Transactions, relationships, strong consistency | High write throughput, flexible/evolving schema, massive horizontal scale |
+
+**Decision rule:** if your access patterns are known in advance and write throughput/schema flexibility dominate, lean NoSQL. If you need multi-row transactions, ad-hoc reporting, or strong consistency guarantees, lean SQL. Most real systems use both — SQL for the transactional core, NoSQL (or a cache) for derived, high-volume, read-heavy data. See [Databases](/01-core-building-blocks/databases) and [Database Scaling](/02-scalability/database-scaling) for the mechanics.
+
+---
+
+## REST vs GraphQL vs gRPC
+
+| | REST | GraphQL | gRPC |
+|---|---|---|---|
+| Contract | Loose (OpenAPI optional) | Strong (schema-first) | Strong (Protobuf, code-gen) |
+| Over-fetching | Common | Solved (client picks fields) | N/A (fixed messages) |
+| Browser support | Native | Native (over HTTP) | Needs gRPC-Web proxy |
+| Performance | Good | Good, but N+1 risk without DataLoader | Best (binary, HTTP/2, streaming) |
+| Best for | Public APIs, simple CRUD | Client-driven apps with varied views (mobile vs web) | Internal service-to-service calls |
+
+**Decision rule:** public-facing, cacheable, resource-oriented API → REST. Multiple frontends with very different data needs from the same backend → GraphQL. High-throughput internal microservice communication where both ends are your own code → gRPC. Full breakdown in [APIs](/01-core-building-blocks/apis).
+
+---
+
+## Synchronous vs Asynchronous Processing
+
+<Callout type="warning">
+The question isn't "sync or async" in the abstract — it's "does the caller need the *result* before it can respond to *its* caller?"
+</Callout>
+
+- **Use synchronous (request/response)** when the caller cannot proceed without the answer — validating a payment before confirming an order, checking auth before serving a page.
+- **Use asynchronous (queue/event)** when the work can happen after the caller has already gotten an acknowledgment — sending a confirmation email, generating a thumbnail, updating a search index, billing reconciliation.
+
+```
+SYNCHRONOUS
+Client → Server: place order
+                  Server: charge card, reserve inventory, write order  (all inline)
+Client ← Server: 200 OK (order confirmed)                — client waited for everything
+
+ASYNCHRONOUS
+Client → Server: place order
+                  Server: charge card, write order            (only what's required now)
+Client ← Server: 202 Accepted (order received)             — client freed immediately
+                  Server → Queue: send-confirmation-email, update-search-index, ...
+                  Workers: process queue in the background, retry on failure
+```
+
+The tell-tale symptom of "this should have been async" is a request handler doing meaningfully more work than the client is waiting to see the result of. See [Message Queues](/04-advanced-topics/message-queues) for the mechanics of making this durable.
+
+---
+
+## Push vs Pull
+
+| | Push | Pull |
+|---|---|---|
+| Who initiates | Server sends when data changes | Client asks periodically |
+| Latency | Near-instant | Bounded by poll interval |
+| Server load | Spikes with active-connection count | Predictable, but wasteful when nothing changed |
+| Examples | WebSockets, SSE, webhooks | REST polling, cron-based sync jobs |
+
+**Decision rule:** if updates are frequent and low-latency delivery matters (chat, live scores, presence), push. If updates are rare, latency tolerance is high, or the consumer might be offline for long stretches (webhooks with retries, batch sync), pull — or push with a durable queue behind it as a hybrid. See [Real-Time & Communication](/10-real-time).
+
+---
+
+## Consistency vs Availability (in practice)
+
+This is CAP theorem applied to an actual product decision, not the theorem itself (see [CAP Theorem](/03-distributed-systems/cap-theorem) for that). The practical question: **when the network partitions, or a replica is temporarily behind, what do you tell the user?**
+
+- **Choose consistency (CP)** for anything involving money, inventory counts, or uniqueness constraints (usernames, seat bookings) — showing a stale-but-available answer here causes real harm (double-spend, oversold seats).
+- **Choose availability (AP)** for anything where a slightly stale view is harmless and *no* answer is worse than an old answer — social feeds, view counts, "last seen" timestamps, product recommendations.
+
+**Rule of thumb:** ask "what happens if the user acts on stale data?" If the answer is "nothing bad," go AP. If the answer is "we lose money or violate an invariant," go CP.
+
+---
+
+## Cache-Aside vs Write-Through vs Write-Behind
+
+| Strategy | Write path | Read path | Risk |
+|---|---|---|---|
+| Cache-aside (lazy load) | App writes to DB, cache is invalidated/left stale | App checks cache, falls back to DB on miss, populates cache | Thundering herd on cache miss for hot keys |
+| Write-through | App writes to cache, cache synchronously writes to DB | Always served from cache | Write latency = DB write latency |
+| Write-behind (write-back) | App writes to cache, cache asynchronously flushes to DB | Always served from cache | Data loss window if cache node dies before flush |
+
+**Decision rule:** cache-aside is the safe default for read-heavy workloads. Write-through when you need the cache and DB to never disagree. Write-behind only when write throughput is the bottleneck and you can tolerate a small durability window — pair it with a durable queue, not a bare in-memory cache. Full detail in [Caching](/01-core-building-blocks/caching).
+
+---
+
+## Build vs Buy (Managed Service vs Self-Hosted)
+
+Ask, in order:
+1. **Is this core to our competitive advantage?** If yes, and only if yes, consider building — differentiation is the only reason to accept the operational burden.
+2. **Does a managed offering meet our latency/compliance/cost constraints?** Most of the time, for infrastructure primitives (queues, caches, search, auth), the answer is yes.
+3. **Can our team actually operate this reliably at 3am?** Self-hosting Kafka, Elasticsearch, or a distributed cache is a genuine operational commitment, not a one-time setup cost.
+
+**Rule of thumb:** buy/use-managed for anything that isn't your product's differentiator. Build only where owning the internals gives you a real, defensible advantage.
+
+---
+
+## Monolith vs Microservices, Vertical vs Horizontal Scaling
+
+These deserve full chapters rather than a table row — see [Architecture Patterns](/05-architecture-patterns) and [Horizontal vs Vertical Scaling](/02-scalability/horizontal-vs-vertical). The one-line versions:
+
+- **Start monolithic.** Split into services when a *specific, felt* pain (independent deploy cadence, independent scaling, team ownership boundaries) exceeds the operational cost of distribution — not preemptively.
+- **Scale vertically first** for anything stateful or single-threaded-bottlenecked; **scale horizontally** once you've hit hardware ceilings or need fault tolerance through redundancy, not just more capacity.
+
+---
+
+## Interview Tips
+
+- Never present a tradeoff as "X is better." Present it as "X optimizes for A at the cost of B; here's why A matters more for this system."
+- Anchor every tradeoff decision to a number where you can: "if writes are 100x reads, I'd shard early" beats "sharding might help."
+- When the interviewer pushes back on your choice, that's usually not a signal you're wrong — it's an invitation to state the tradeoff you made explicitly. Naming the cost you accepted is often worth more than defending the choice.
+- If you're ever unsure, say what you'd measure to decide, and what threshold would flip your answer. That's a stronger answer than a confident guess.

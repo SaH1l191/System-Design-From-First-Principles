@@ -2,7 +2,7 @@ import Link from 'next/link'
 
 export function Hero() {
   return (
-    <div className="hero">
+    <section className="hero">
       <p className="hero-eyebrow">A stage-by-stage system design reference</p>
       <h1 className="hero-title">
         System Design, from <em>first principles</em>.
@@ -15,14 +15,14 @@ export function Hero() {
         is a self-contained reference with diagrams, tradeoff tables, and
         interview-ready explanations.
       </p>
-      <div className="hero-actions">
+      <nav className="hero-actions" aria-label="Getting started">
         <Link href="/01-core-building-blocks" className="btn btn-primary">
           Start with Core Building Blocks <span aria-hidden="true">→</span>
         </Link>
         <a href="#the-stages" className="btn btn-secondary">
           See all stages
         </a>
-      </div>
-    </div>
+      </nav>
+    </section>
   )
 }
