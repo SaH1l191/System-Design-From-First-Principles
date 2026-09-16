@@ -46,6 +46,7 @@ const config: DocsThemeConfig = {
       <meta name="apple-mobile-web-app-title" content="SDFP" />
       <meta name="theme-color" content="#0a0a0a" />
       <link rel="icon" href="/favicon.ico" />
+      <link rel="stylesheet" href="/styles.css" />
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       <link

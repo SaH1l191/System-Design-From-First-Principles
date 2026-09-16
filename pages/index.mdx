@@ -1,16 +1,120 @@
 ---
 title: System Design, from First Principles
 ---
-import { Cards, Card } from 'nextra/components'
 import { Hero } from '../components/Hero'
 
 <Hero />
 
----
+<div className="stages-section" id="the-stages">
 
 ## The Stages
 
-APIs, Databases, Caching, Load Balancing, Proxies Horizontal vs Vertical, Sharding, Replication, Consistent Hashing, Rate Limiting CAP, Consistency Models, Consensus, Transactions, Service Discovery Message Queues, Kafka, Design Patterns Monolith, Microservices, Serverless, Event-Driven, DDD, 12-Factor Tradeoff frameworks and decision matrices Async, threading, locks, and distributed coordination Logging, metrics, tracing, alerting Auth, encryption, threat models, secure design WebSockets, SSE, Video Streaming, Presence Systems Spatial Indexes, Geohashing, H3, Route Optimization
+</div>
+
+<div className="stage-cards">
+
+<a href="/01-core-building-blocks" className="stage-card">
+  <span className="stage-card-number">01</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Core Building Blocks</h3>
+    <p className="stage-card-desc">APIs, Databases, Caching, Load Balancing, Proxies</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/02-scalability" className="stage-card">
+  <span className="stage-card-number">02</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Scalability & Performance</h3>
+    <p className="stage-card-desc">Horizontal vs Vertical Scaling, Sharding, Replication, Rate Limiting</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/03-distributed-systems" className="stage-card">
+  <span className="stage-card-number">03</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Distributed Systems</h3>
+    <p className="stage-card-desc">CAP Theorem, Consistency Models, Consensus, Transactions</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/04-advanced-topics" className="stage-card">
+  <span className="stage-card-number">04</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Advanced Topics</h3>
+    <p className="stage-card-desc">Design Patterns, Message Queues, Event Sourcing</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/05-architecture-patterns" className="stage-card">
+  <span className="stage-card-number">05</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Architecture Patterns</h3>
+    <p className="stage-card-desc">Microservices, Serverless, Event-Driven, Domain-Driven Design</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/06-design-decisions" className="stage-card">
+  <span className="stage-card-number">06</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Design Decisions</h3>
+    <p className="stage-card-desc">Tradeoff frameworks and decision matrices</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/07-concurrency" className="stage-card">
+  <span className="stage-card-number">07</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Concurrency & Parallelism</h3>
+    <p className="stage-card-desc">Threading, locks, distributed coordination</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/08-observability" className="stage-card">
+  <span className="stage-card-number">08</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Observability & Monitoring</h3>
+    <p className="stage-card-desc">Logging, metrics, tracing, alerting</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/09-security" className="stage-card">
+  <span className="stage-card-number">09</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Security</h3>
+    <p className="stage-card-desc">Auth, encryption, threat models</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/10-real-time" className="stage-card">
+  <span className="stage-card-number">10</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Real-Time & Communication</h3>
+    <p className="stage-card-desc">WebSockets, Server-Sent Events, Video Streaming</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+<a href="/11-geospatial" className="stage-card">
+  <span className="stage-card-number">11</span>
+  <div className="stage-card-body">
+    <h3 className="stage-card-title">Location & Geospatial</h3>
+    <p className="stage-card-desc">Spatial Indexes, Geohashing, H3</p>
+  </div>
+  <span className="stage-card-arrow">&rarr;</span>
+</a>
+
+</div>
+
+<div className="hero-divider" />
 
 ---
 
@@ -33,4 +137,21 @@ Backend engineers preparing for system design interviews, and anyone who wants t
 
 ---
 
-> "Learn the fundamentals, and the frameworks become obvious."
+<div className="community-card">
+  <span className="community-card-tag">Community</span>
+  <h3 className="community-card-title">Built in the open, improved by the community</h3>
+  <p className="community-card-desc">
+    Found a mistake? Want to add a diagram? Every improvement makes this reference
+    better for the next engineer. Contributions of all sizes are welcome.
+  </p>
+  <a href="https://github.com/SaH1l191/sys-design-site" className="community-card-btn" target="_blank" rel="noopener noreferrer">
+    Contribute on GitHub &rarr;
+  </a>
+</div>
+
+<div className="site-footer">
+  <div className="site-footer-divider" />
+  <p className="site-footer-quote">
+    &ldquo;Learn the fundamentals, and the frameworks become obvious.&rdquo;
+  </p>
+</div>
