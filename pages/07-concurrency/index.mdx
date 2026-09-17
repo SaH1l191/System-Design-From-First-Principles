@@ -1,0 +1,21 @@
+---
+title: Concurrency & Parallelism
+---
+
+# Concurrency & Parallelism
+
+> How to do many things at once without stepping on each other.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **Concurrency & Parallelism Fundamentals** | Processes vs threads, race conditions, locks/mutexes/semaphores, deadlocks, optimistic vs pessimistic concurrency control, distributed locks, async I/O, thread pools, the actor model |
+
+---
+
+## Why This Matters
+
+Almost every hard bug in production backend systems traces back to an assumption about ordering or atomicity that concurrency violated. Understanding these primitives isn't academic — it's the difference between a design that quietly double-charges a customer under load and one that doesn't.

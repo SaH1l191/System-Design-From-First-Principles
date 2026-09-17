@@ -1,0 +1,208 @@
+---
+title: Concurrency & Parallelism Fundamentals
+---
+
+import { Callout } from 'nextra/components'
+
+# Concurrency & Parallelism Fundamentals
+
+> Imagine a single cashier serving a line of customers by rapidly switching attention between three registers, versus a store that opens three registers with three cashiers. The first is **concurrency** — many things in progress, possibly on one worker, interleaved. The second is **parallelism** — many things literally happening at the same instant. Backend systems need both, and confusing them is the single most common source of "it worked on my machine" bugs.
+
+---
+
+## Concurrency vs Parallelism
+
+```
+CONCURRENCY (interleaved, single core)
+Core 1: [Task A][Task B][Task A][Task B][Task A]
+        → both make progress, but never truly simultaneous
+
+PARALLELISM (simultaneous, multiple cores)
+Core 1: [Task A][Task A][Task A]
+Core 2: [Task B][Task B][Task B]
+        → both run at the exact same instant
+```
+
+You can have concurrency without parallelism (single-core async I/O), and you can have parallelism without much concurrency (running the same batch job on 100 identical, independent machines). Most real systems need both: concurrent handling of many in-flight requests, parallel execution across cores/machines for throughput.
+
+---
+
+## Processes vs Threads
+
+| | Process | Thread |
+|---|---|---|
+| Memory | Own isolated address space | Shares address space with sibling threads |
+| Creation cost | Expensive (OS-level fork/exec) | Cheap (shares most process state) |
+| Crash isolation | One process crashing doesn't kill others | One thread crashing can take down the whole process |
+| Communication | IPC (pipes, sockets, shared memory) — explicit and slower | Shared memory — implicit and fast, but requires synchronization |
+| Typical use | Isolating untrusted or independent workloads | Parallelizing work within one program |
+
+<Callout type="info">
+Python's GIL (Global Interpreter Lock) means only one thread executes Python bytecode at a time even on multi-core machines — threads still help with I/O-bound work (they release the GIL during I/O), but for CPU-bound parallelism Python reaches for multiple *processes* instead.
+</Callout>
+
+---
+
+## The Core Problem: Race Conditions
+
+A race condition occurs when the correctness of a result depends on the non-deterministic timing of concurrent operations.
+
+```
+Two requests increment the same counter, starting at count = 5
+
+Thread A: read count (5)
+Thread B: read count (5)
+Thread A: write count + 1 (6)
+Thread B: write count + 1 (6)   ← should be 7, one increment was lost
+```
+
+This is why "read-modify-write" sequences on shared state are the single most dangerous pattern in concurrent code — the fix is always some form of making the sequence atomic or serialized.
+
+---
+
+## Critical Sections & Locks
+
+A **critical section** is a piece of code that accesses shared state and must not be executed by more than one thread at a time. Locks (mutexes) enforce this.
+
+```python
+lock = threading.Lock()
+
+def increment():
+    with lock:          # only one thread can be inside at a time
+        count += 1
+```
+
+| Primitive | What it guarantees | Typical use |
+|---|---|---|
+| **Mutex** | Only one holder at a time | Protecting a single shared resource |
+| **Semaphore** | Up to N holders at a time | Limiting concurrent access to a pool (e.g. max 10 DB connections) |
+| **Read-write lock** | Many readers OR one writer, never both | Data read far more often than written |
+| **Spinlock** | Like a mutex, but busy-waits instead of sleeping | Very short critical sections where context-switch cost exceeds wait cost |
+
+<Callout type="warning">
+Locks solve races but introduce a new risk: **contention**. Every thread waiting on a lock is a thread doing no useful work. Long critical sections under high concurrency are a classic throughput killer — the fix is usually to shrink the critical section, not to add more locking.
+</Callout>
+
+---
+
+## Deadlocks
+
+A deadlock happens when two or more threads are each waiting for a resource the other holds — nobody can proceed.
+
+```
+Thread A: holds Lock 1, waiting for Lock 2
+Thread B: holds Lock 2, waiting for Lock 1
+→ neither ever proceeds
+```
+
+**The four necessary conditions** (all must hold for deadlock to occur — break any one, and deadlock is impossible):
+
+1. **Mutual exclusion** — resources can't be shared.
+2. **Hold and wait** — a thread holds one resource while waiting for another.
+3. **No preemption** — a resource can't be forcibly taken from a thread.
+4. **Circular wait** — a cycle of threads each waiting on the next.
+
+**Practical prevention:**
+- **Lock ordering:** always acquire locks in the same global order across the whole codebase (e.g. always lock by ascending account ID). This breaks circular wait.
+- **Timeouts:** use `tryLock(timeout)` instead of blocking forever; back off and retry on failure.
+- **Reduce lock scope:** the less time you hold a lock, the less chance of contention becoming deadlock.
+
+---
+
+## Optimistic vs Pessimistic Concurrency Control
+
+| | Pessimistic | Optimistic |
+|---|---|---|
+| Assumption | Conflicts are likely | Conflicts are rare |
+| Mechanism | Acquire a lock before touching data | Read data, do work, write only if nothing changed (compare-and-swap / version check) |
+| Cost | Blocking, reduces throughput under load | No blocking, but must handle retry-on-conflict |
+| Example | `SELECT ... FOR UPDATE` | `UPDATE ... WHERE version = 5` (optimistic locking column) |
+
+**Decision rule:** if writes to the same record are frequent (hot rows), pessimistic locking avoids wasted retries. If conflicts are rare (most rows touched by at most one writer at a time), optimistic concurrency avoids the cost of locking on the common, uncontended path.
+
+```sql
+-- Optimistic locking with a version column
+UPDATE accounts
+SET balance = balance - 100, version = version + 1
+WHERE id = 42 AND version = 7;
+-- if 0 rows affected, someone else updated it first — reload and retry
+```
+
+---
+
+## Distributed Locks
+
+A regular mutex only works within one process. Across multiple machines, you need a **distributed lock** — typically built on a system all nodes agree can act as a single source of truth (Redis, ZooKeeper, etcd).
+
+```
+Node A: SET lock:job-42 "node-A" NX EX 30   ← acquires if not already set, auto-expires in 30s
+Node B: SET lock:job-42 "node-B" NX EX 30   ← fails, lock already held
+```
+
+<Callout type="warning">
+**The expiry is a safety valve, not a correctness guarantee.** If Node A pauses (GC pause, network blip) past the 30s TTL, the lock releases and Node B can acquire it — now two nodes believe they hold the lock. Real distributed locking (e.g. Redlock, or a fencing token from ZooKeeper/etcd) requires either a monotonically increasing fencing token that downstream systems check, or accepting that the lock is a best-effort optimization, not an absolute guarantee, for anything where a double-execution would be catastrophic.
+</Callout>
+
+---
+
+## Async I/O & the Event Loop
+
+Most backend work is I/O-bound, not CPU-bound — waiting on a database, a downstream API, a disk read. Blocking a whole thread for each wait is wasteful. The event loop model runs a single thread that never blocks: it dispatches an I/O operation, moves on to other work, and comes back when the OS signals completion.
+
+```
+Traditional (thread-per-request):
+  1000 concurrent requests → 1000 OS threads → high memory, context-switch overhead
+
+Event loop (Node.js, Python asyncio, Go's goroutine scheduler):
+  1000 concurrent requests → 1 (or a few) threads, each request is a
+  lightweight coroutine that yields control while waiting on I/O
+```
+
+```python
+async def handle_request():
+    data = await db.fetch(query)   # yields control here; thread handles other work
+    return process(data)
+```
+
+**Tradeoff:** async code handles far more concurrent I/O-bound work per thread, but a single CPU-bound task run synchronously inside the event loop blocks *everything* — there's no preemption. CPU-heavy work needs to be offloaded to a worker thread/process pool, not run inline.
+
+---
+
+## Thread Pools & Worker Pools
+
+Creating a new thread (or process) per unit of work is expensive at scale. A **pool** pre-creates a fixed number of workers and reuses them via a task queue.
+
+```
+                 ┌──────────────┐
+Incoming tasks → │  Task Queue  │
+                 └──────┬───────┘
+                        ▼
+              ┌─────────────────┐
+              │  Worker Pool     │
+              │  [W1][W2][W3][W4]│  ← fixed size, pulls from queue
+              └─────────────────┘
+```
+
+**Sizing rule of thumb:** for CPU-bound work, pool size ≈ number of CPU cores. For I/O-bound work, pool size can be much larger since workers spend most of their time waiting, not computing — the right number is found by load testing, not a formula.
+
+---
+
+## The Actor Model
+
+An alternative to shared-memory concurrency: instead of threads sharing mutable state behind locks, each **actor** owns its state privately and communicates only via asynchronous messages. No shared memory means no race conditions on that state — the price is that all interaction becomes explicit message-passing.
+
+```
+Actor A ──message──▶ Actor B ──message──▶ Actor C
+(each actor processes one message at a time, sequentially, no locks needed)
+```
+
+Used in Erlang/Elixir (and the actor libraries built on top of the BEAM VM), Akka (JVM), and conceptually similar to how a single-threaded event-loop service treats each request handler. It trades the complexity of lock management for the complexity of message-passing and eventual consistency between actors.
+
+---
+
+## Interview Tips
+
+- If asked "how do you prevent double-processing of a job," the expected shape of the answer is: **idempotency key + a mechanism that makes the check-and-act atomic** (a distributed lock, a unique constraint, or a conditional write) — not just "add a lock."
+- When a design has multiple writers to the same resource, proactively name the concurrency control strategy (optimistic vs pessimistic) and justify it by conflict frequency — this signals seniority.
+- For anything crossing a network boundary (distributed lock, leader election), acknowledge that timeouts and partial failures make "exactly one holder" a probabilistic guarantee, not an absolute one, unless backed by fencing tokens.
+- Don't reach for "just add more threads" as a scaling answer — name the actual bottleneck (CPU-bound vs I/O-bound) first, since the fix is different for each.
