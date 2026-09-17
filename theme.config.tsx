@@ -33,9 +33,9 @@ const config: DocsThemeConfig = {
     </span>
   ),
   project: {
-    link: 'https://github.com/SaH1l191/sys-design-site',
+    link: 'https://github.com/SaH1l191/System-Design-From-First-Principles',
   },
-  docsRepositoryBase: 'https://github.com/SaH1l191/sys-design-site/tree/main',
+  docsRepositoryBase: 'https://github.com/SaH1l191/System-Design-From-First-Principles/tree/main',
   head: (
     <>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
