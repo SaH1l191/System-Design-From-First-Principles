@@ -43,6 +43,15 @@ const config: DocsThemeConfig = {
       <meta name="description" content="System Design from First Principles: A comprehensive, stage-by-stage reference for backend engineers and system design interviews." />
       <meta name="og:description" content="System Design from First Principles: A comprehensive, stage-by-stage reference for backend engineers and system design interviews." />
       <meta name="og:title" content="System Design from First Principles" />
+      <meta property="og:type" content="website" />
+      <meta property="og:url" content="https://system-design-from-first-principles.vercel.app/" />
+      <meta property="og:image" content="https://system-design-from-first-principles.vercel.app/og-image.png" />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta name="twitter:title" content="System Design from First Principles" />
+      <meta name="twitter:description" content="System Design from First Principles: A comprehensive, stage-by-stage reference for backend engineers and system design interviews." />
+      <meta name="twitter:image" content="https://system-design-from-first-principles.vercel.app/og-image.png" />
       <meta name="apple-mobile-web-app-title" content="SDFP" />
       <meta name="theme-color" content="#0a0a0a" />
       <link rel="icon" href="/favicon.ico" />
