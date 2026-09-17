@@ -1,0 +1,30 @@
+---
+title: Location & Geospatial
+---
+
+# Location & Geospatial
+
+> Finding "things near me" is one of the hardest problems in databases.
+
+Everything you need to know about geospatial data structures, location-based services, and real-time tracking systems.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **Spatial Indexes** | QuadTree, R-Tree, KD-Tree, H3 (Uber's hex indexing) |
+| **Nearby Search** | Geohashing, S2, proximity queries |
+| **Route Optimization** | Shortest path, real-time traffic, multi-stop |
+| **Real-Time Tracking** | Driver/rider location, ETA calculation, surge pricing |
+
+---
+
+## Why 1D Sort Order Fails
+
+Your database can find every user between age 20 and 30 in milliseconds. But finding every driver within 2km of you? That's a different problem entirely.
+
+Latitude alone gives you a horizontal strip. Longitude alone gives you a vertical strip. Their intersection is millions of rows you have to distance-check by hand.
+
+Every production system converged on one of two approaches: build a custom tree for 2D, or turn lat/lng into a single key a B-Tree can sort.

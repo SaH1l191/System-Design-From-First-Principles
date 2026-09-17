@@ -1,0 +1,139 @@
+---
+title: Observability Fundamentals
+---
+
+import { Callout } from 'nextra/components'
+
+# Observability Fundamentals
+
+> A pilot doesn't fly by looking out the window — they fly by reading instruments that tell them altitude, speed, and heading even when visibility is zero. Observability is the instrument panel for a distributed system: the ability to ask arbitrary questions about what's happening inside it *without having shipped new code to answer that specific question.* Monitoring tells you the system is broken. Observability tells you why.
+
+---
+
+## Monitoring vs Observability
+
+| | Monitoring | Observability |
+|---|---|---|
+| Question answered | "Is something wrong?" (known unknowns) | "What exactly is wrong, and why?" (unknown unknowns) |
+| Setup | Pre-defined dashboards and alerts for expected failure modes | Rich, queryable telemetry that lets you investigate failure modes you didn't anticipate |
+| Analogy | A dashboard warning light | A mechanic's full diagnostic toolkit |
+
+You need both — monitoring tells you *when* to look, observability tells you *where* to look.
+
+---
+
+## The Three Pillars
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│   Logs    │    │ Metrics  │    │  Traces  │
+│ "what     │    │ "how     │    │ "where   │
+│ happened, │    │ many, how│    │ did the  │
+│ in detail"│    │ fast, on │    │ time go, │
+│           │    │ average" │    │ across   │
+│           │    │          │    │ services"│
+└──────────┘    └──────────┘    └──────────┘
+```
+
+### Logs
+Discrete, timestamped records of events — the most granular signal, and the most expensive to store and search at volume.
+
+```json
+{"ts": "2026-09-07T10:02:31Z", "level": "error", "service": "payments",
+ "trace_id": "abc123", "msg": "card declined", "user_id": 4821}
+```
+
+**Structured logging** (JSON, key-value pairs) instead of free-text is what makes logs actually queryable at scale — "give me every error for user 4821 in the last hour" is a filter on structured fields, not a regex over prose.
+
+### Metrics
+Numeric measurements aggregated over time — counters, gauges, histograms. Cheap to store (a running aggregate, not one entry per event), fast to query, ideal for dashboards and alerting.
+
+| Type | What it measures | Example |
+|---|---|---|
+| Counter | A value that only increases | Total requests served |
+| Gauge | A value that goes up or down | Current queue depth, active connections |
+| Histogram | Distribution of values, enables percentiles | Request latency (p50, p95, p99) |
+
+<Callout type="warning">
+**Averages lie.** If p50 latency is 50ms but p99 is 4 seconds, the average might look fine at ~90ms while 1% of your users — potentially your highest-value ones, since heavy users hit more edge cases — have a terrible experience. Always look at percentiles (p95, p99), never just the mean.
+</Callout>
+
+### Traces
+A trace follows a single request as it moves across every service it touches, broken into **spans** (one span per unit of work: an API call, a DB query, a downstream RPC).
+
+```
+Trace: GET /checkout (450ms total)
+├─ span: api-gateway (5ms)
+├─ span: auth-service (20ms)
+├─ span: inventory-service (150ms)
+│   └─ span: postgres query (140ms)  ← the actual bottleneck
+└─ span: payment-service (270ms)
+    └─ span: external card processor call (260ms)  ← and this one
+```
+
+Without tracing, "checkout is slow" requires guessing which of five services is at fault. With tracing, the slow span is visible directly. **Trace context propagation** — passing a trace ID through every hop (HTTP headers, message queue metadata) — is what stitches spans from different services into one trace. OpenTelemetry is the current industry-standard instrumentation layer for producing all three pillars in a vendor-neutral way.
+
+---
+
+## SLI, SLO, SLA, and Error Budgets
+
+| Term | Definition | Example |
+|---|---|---|
+| **SLI** (Indicator) | A measured metric of service behavior | "% of requests served in &lt; 200ms" |
+| **SLO** (Objective) | An internal target for that SLI | "99.9% of requests &lt; 200ms, over 30 days" |
+| **SLA** (Agreement) | An external, often contractual, commitment (usually looser than the SLO) | "99.5% uptime, or the customer gets a credit" |
+
+The gap between SLO and SLA is deliberate headroom — you want to breach your own internal target before you ever risk breaching a customer-facing contract.
+
+**Error budget:** if your SLO is 99.9% availability over 30 days, your error budget is the remaining 0.1% (~43 minutes/month) of allowed failure. This reframes reliability work as a *resource to spend*, not an infinite mandate: burn through the budget, and the team pauses feature launches to focus on stability; have budget left, and you can ship faster and take more risk.
+
+<Callout type="info">
+**Interview signal:** proposing an SLO of "100% uptime" is a red flag, not a strength — it's both impossible and, worse, it implies zero room for the deployment risk that shipping new features requires. A stated, deliberately-imperfect target is the mature answer.
+</Callout>
+
+---
+
+## Alerting Philosophy
+
+**Alert on symptoms, not causes.** Page a human when *users* are affected (error rate spiked, latency SLO breached), not for every internal anomaly (one server's CPU ticked up) — the latter belongs in a dashboard, not a page.
+
+```
+BAD alert:  "CPU on host-42 > 80%"
+             → might be nothing; auto-scaling may already be handling it
+
+GOOD alert: "checkout error rate > 1% for 5 minutes"
+             → definitively affects users, regardless of root cause
+```
+
+**Alert fatigue** is the single biggest threat to an on-call system's effectiveness — every noisy, unactionable alert trains engineers to ignore pages, including the one that matters. Every alert should be actionable (there's something a human can *do*), and every alert that fires without action being needed should be tuned or removed.
+
+---
+
+## Health Checks: Liveness vs Readiness
+
+Used by orchestrators (Kubernetes, load balancers) to decide whether to route traffic to an instance, or restart it.
+
+| Check | Question it answers | Failure action |
+|---|---|---|
+| **Liveness** | "Is this process still alive, or hung/deadlocked?" | Restart the container |
+| **Readiness** | "Is this instance ready to accept traffic right now?" | Remove from load balancer rotation, but don't restart |
+| **Startup** | "Has this slow-starting process finished initializing?" | Delay liveness/readiness checks until this passes |
+
+<Callout type="warning">
+Conflating liveness and readiness is a classic outage cause: a service that's temporarily overloaded (should fail readiness, to shed load) but is treated as failing liveness gets restarted repeatedly — which makes an overload problem *worse*, since restarting drops in-flight work and the fresh instance immediately gets slammed with the same traffic.
+</Callout>
+
+---
+
+## Dashboards
+
+A good dashboard answers "is the system healthy right now" in the first five seconds of looking at it — typically the **RED method** (Rate, Errors, Duration) for request-driven services, or the **USE method** (Utilization, Saturation, Errors) for resources like CPU, memory, and queues. Dashboards are for humans doing a quick scan; deep investigation belongs in logs and traces, not more dashboard panels.
+
+---
+
+## Interview Tips
+
+- If asked "how would you debug a slow endpoint in production," the expected shape is: check dashboards for the symptom → find the trace for a slow request → identify the slow span → drill into logs for that specific span. Naming this pipeline, not just "check the logs," signals real operational experience.
+- Always propose an SLO with a number attached ("99.9% under 300ms") rather than a vague "it should be fast" — vague reliability targets can't be measured or defended.
+- When designing a new service, proactively mention what you'd monitor (RED/USE metrics) and what you'd alert on (symptom-based) — this is a strong signal even if the interviewer didn't ask.
+- Distinguish liveness from readiness explicitly if health checks come up; conflating them is a common and revealing mistake.

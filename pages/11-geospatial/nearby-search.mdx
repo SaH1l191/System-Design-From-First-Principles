@@ -1,0 +1,129 @@
+---
+title: Nearby Search & Geohashing
+---
+
+import { Callout } from 'nextra/components'
+
+# 11.2 Location-Based Services
+
+> Now that we understand the data structures, let's build real services on top of them. Location-based services answer questions like: "Where's the nearest restaurant?", "How long until my ride arrives?", "Why is the fare $35 instead of $15?"
+
+---
+
+## Nearby Search
+
+### The Problem
+
+A user opens a ride-sharing app and sees nearby drivers on the map. The system must:
+
+1. **Find** all drivers within 5km of the user
+2. **Sort** by distance
+3. **Return** the 5 closest
+4. **Do this** in &lt; 100ms for millions of users simultaneously
+
+### Architecture
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Driver   │────→│ Location     │────→│ Spatial     │
+│ App      │     │ Service      │     │ Index       │
+│ (GPS)    │     │ (receives    │     │ (QuadTree/  │
+└──────────┘     │  updates)    │     │  H3/Grid)   │
+                 └──────────────┘     └──────┬──────┘
+                                            │
+┌──────────┐     ┌──────────────┐     ┌──────▼──────┐
+│ Rider    │────→│ Nearby       │────→│ Query       │
+│ App      │     │ Search API   │     │ Engine      │
+└──────────┘     └──────────────┘     └─────────────┘
+```
+
+### Nearby Search Implementation
+
+```python
+# Option 1: Geohash-based
+def find_nearby_drivers_geohash(lat, lon, radius_km=5):
+    geohash = geohash2.encode(lat, lon, precision=7)
+    neighbors = geohash2.neighbors(geohash[:5])  # Neighborhood level
+    
+    candidates = []
+    for gh in [geohash[:5]] + list(neighbors.values()):
+        candidates.extend(redis.zrange(f"drivers:{gh}", 0, -1))
+    
+    # Filter by actual distance
+    nearby = []
+    for driver_id in candidates:
+        d_lat, d_lon = get_driver_location(driver_id)
+        dist = haversine(lat, lon, d_lat, d_lon)
+        if dist <= radius_km:
+            nearby.append((driver_id, dist))
+    
+    nearby.sort(key=lambda x: x[1])
+    return nearby[:10]  # Top 10 closest
+
+# Option 2: H3-based
+def find_nearby_drivers_h3(lat, lon, radius_km=5):
+    center_h3 = h3.latlng_to_cell(lat, lon, resolution=7)
+    nearby_hexes = h3.grid_disk(center_h3, k=3)
+    
+    candidates = []
+    for hex_id in nearby_hexes:
+        drivers = redis.smembers(f"h3:{hex_id}")
+        candidates.extend(drivers)
+    
+    # Filter and sort by distance
+    nearby = []
+    for driver_id in candidates:
+        d_lat, d_lon = get_driver_location(driver_id)
+        dist = haversine(lat, lon, d_lat, d_lon)
+        if dist <= radius_km:
+            nearby.append((driver_id, dist))
+    
+    nearby.sort(key=lambda x: x[1])
+    return nearby[:10]
+
+# Option 3: Redis GEO (uses geohashing internally)
+def find_nearby_drivers_redis(lat, lon, radius_km=5):
+    # GEOADD stores locations
+    # redis.geoadd("drivers", (lon, lat, "driver_123"))
+    
+    # GEORADIUS finds nearby
+    nearby = redis.georadius(
+        "drivers", lon, lat, radius_km,
+        unit="km",
+        withdist=True,
+        sort="ASC",
+        count=10
+    )
+    return nearby
+```
+
+### Redis GEO Commands
+
+```bash
+# Add driver locations
+GEOADD drivers -74.0060 40.7128 "driver_001"
+GEOADD drivers -73.9851 40.7589 "driver_002"
+GEOADD drivers -73.9712 40.7831 "driver_003"
+
+# Find drivers within 5km (sorted by distance)
+GEORADIUS drivers -74.0060 40.7128 5 km ASC COUNT 10 WITHDIST
+
+# Get distance between two drivers
+GEODIST drivers "driver_001" "driver_002" km
+
+# Get geohash of a location
+GEOHASH drivers "driver_001"
+# Returns: "dr5ru7rxyq"
+```
+
+### Performance Considerations
+
+| Approach | Latency | Throughput | Accuracy |
+| --- | --- | --- | --- |
+| **Redis GEO** | ~1ms | 100K+ ops/sec | High |
+| **Geohash prefix** | ~2ms | 50K+ ops/sec | High (with neighbor check) |
+| **H3 grid disk** | ~3ms | 30K+ ops/sec | High |
+| **QuadTree (in-memory)** | ~0.5ms | 500K+ ops/sec | High |
+| **Database (PostGIS)** | ~10ms | 5K+ ops/sec | Very high |
+
+---

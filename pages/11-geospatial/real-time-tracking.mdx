@@ -1,0 +1,383 @@
+---
+title: Real-Time Tracking, Surge Pricing & ETA
+---
+
+import { Callout } from 'nextra/components'
+
+## Real-Time Tracking
+
+### The Problem
+
+Uber shows your driver's location updating every 3-5 seconds on your phone. This requires:
+
+1. **Drivers** sending GPS updates every few seconds
+2. **Servers** processing millions of location updates per minute
+3. **Clients** receiving real-time position updates via WebSocket/SSE
+
+### Architecture
+
+```
+                    ┌─────────────────────────────────┐
+                    │         Location Service         │
+                    │                                  │
+┌──────────┐       │  ┌─────────┐    ┌──────────┐    │       ┌──────────┐
+│ Driver   │──GPS──│─→│ Ingest  │───→│ Location │    │       │ Rider    │
+│ App      │       │  │ Service │    │ Store    │    │       │ App      │
+│ (every   │       │  └─────────┘    └──────────┘    │       │ (receives│
+│  3-5 sec)│       │                    │             │       │  updates │
+└──────────┘       │              ┌─────▼──────┐     │       │  via WS) │
+                   │              │ Event Bus  │     │──────→└──────────┘
+                   │              │ (Kafka)    │     │
+                   │              └─────┬──────┘     │
+                   │                    │             │
+                   │              ┌─────▼──────┐     │
+                   │              │ Tracking   │     │
+                   │              │ Service    │     │
+                   │              │ (WebSocket │     │
+                   │              │  push to   │     │
+                   │              │  riders)   │     │
+                   │              └────────────┘     │
+                   └─────────────────────────────────┘
+```
+
+### Location Update Flow
+
+```python
+# Driver sends GPS update
+class LocationIngestService:
+    def handle_location_update(self, driver_id, lat, lon, timestamp):
+        # 1. Store current location in Redis (fast reads)
+        redis.geoadd("driver_locations", (lon, lat, driver_id))
+        redis.hset(f"driver:{driver_id}", mapping={
+            "lat": lat,
+            "lon": lon,
+            "timestamp": timestamp,
+            "heading": heading,
+            "speed": speed
+        })
+        
+        # 2. Publish to Kafka for async processing
+        kafka.produce("driver-locations", {
+            "driver_id": driver_id,
+            "lat": lat,
+            "lon": lon,
+            "timestamp": timestamp
+        })
+        
+        # 3. Check if driver is in any active trip zone
+        if self.is_on_trip(driver_id):
+            self.update_trip_location(driver_id, lat, lon)
+
+# Tracking service pushes to riders
+class TrackingService:
+    def on_driver_location(self, event):
+        trip = get_active_trip(event.driver_id)
+        if trip:
+            # Push location to rider's WebSocket
+            rider_ws = self.get_websocket(trip.rider_id)
+            rider_ws.send({
+                "type": "driver_location",
+                "lat": event.lat,
+                "lon": event.lon,
+                "heading": event.heading,
+                "eta_minutes": self.calculate_eta(trip)
+            })
+```
+
+### Location Update Optimization
+
+**Problem:** 1 million drivers × 1 update/sec = 1 million writes/sec
+
+**Solution 1: Adaptive Update Frequency**
+```python
+def get_update_frequency(driver_state):
+    if driver_state == "idle":
+        return 30  # seconds (not much changes)
+    elif driver_state == "en_route":
+        return 5   # seconds (need accurate tracking)
+    elif driver_state == "arriving":
+        return 2   # seconds (rider wants precise location)
+    elif driver_state == "stopped":
+        return 60  # seconds (parked, barely moving)
+```
+
+**Solution 2: Delta Updates**
+```
+Only send location if:
+  - Moved > 50 meters since last update
+  - Changed heading > 30 degrees
+  - More than 10 seconds since last update
+  
+This reduces updates by 60-80% for idle/stopped drivers
+```
+
+**Solution 3: Spatial Batching**
+```
+Instead of: 1 message per driver per update
+Batch: 100 driver updates in 1 Kafka message
+Reduces: Kafka overhead, network calls
+```
+
+### WebSocket Scaling
+
+```
+100,000 concurrent riders watching drivers
+
+WebSocket connections: 100,000
+Each connection receives: ~1 message/5 seconds
+Total outbound: 20,000 messages/second
+
+Architecture:
+  Load Balancer → WebSocket Servers (N instances)
+  
+  Each server handles: ~10,000 connections
+  Need: 10 WebSocket server instances
+  
+  Driver location → Kafka → Tracking Service → WebSocket Servers → Riders
+```
+
+### Real-World Companies
+
+| Company | Technology | Update Frequency | Scale |
+| --- | --- | --- | --- |
+| **Uber** | H3 + custom WebSocket | 3-5 seconds | 5M+ drivers |
+| **Lyft** | H3 + custom | 4 seconds | 1M+ drivers |
+| **Google Maps** | Custom | Variable | 1B+ devices |
+| **Waze** | Custom | 3-10 seconds | 100M+ users |
+| **DoorDash** | Custom | 5-10 seconds | 500K+ dashers |
+
+---
+
+## Surge Pricing
+
+### What Is Surge Pricing?
+
+Dynamic pricing based on supply (drivers) and demand (ride requests) in a geographic area.
+
+```
+Normal:  $15 ride
+Surge:   $35 ride (2.3x multiplier)
+
+Why? Too many riders, not enough drivers in your area.
+Surge encourages:
+  - More drivers to come to the area (higher earnings)
+  - Some riders to wait or use alternatives (lower demand)
+  - Supply/demand equilibrium
+```
+
+### How Surge Pricing Works
+
+```
+Step 1: Divide city into geographic zones (hexagons or grid cells)
+Step 2: For each zone, calculate:
+  supply = number of available drivers
+  demand = number of ride requests
+  
+Step 3: Calculate surge multiplier
+  ratio = demand / supply
+  if ratio > 1.2: surge = 1.0 + (ratio - 1.2) × factor
+  if ratio <= 1.2: surge = 1.0 (no surge)
+  
+Step 4: Apply multiplier to base fare
+  base_fare = $15
+  surge_multiplier = 2.3x
+  total = $15 × 2.3 = $34.50
+```
+
+### Surge Pricing Algorithm
+
+```python
+def calculate_surge(zone_id):
+    # Get supply and demand
+    drivers = redis.scard(f"available_drivers:{zone_id}")
+    requests = redis.get(f"demand:{zone_id}") or 0
+    
+    if drivers == 0:
+        return 10.0  # Maximum surge (no drivers available!)
+    
+    ratio = requests / drivers
+    
+    # Surge tiers
+    if ratio < 1.0:
+        return 1.0      # No surge (excess supply)
+    elif ratio < 1.5:
+        return 1.0 + (ratio - 1.0) * 0.5   # Mild surge
+    elif ratio < 2.5:
+        return 1.25 + (ratio - 1.5) * 1.0  # Moderate surge
+    elif ratio < 5.0:
+        return 2.25 + (ratio - 2.5) * 0.5  # High surge
+    else:
+        return 3.5      # Cap at 3.5x (user experience limit)
+
+def apply_surge_pricing(ride_request):
+    zone = get_zone(ride_request.pickup_lat, ride_request.pickup_lon)
+    surge = calculate_surge(zone)
+    base_fare = calculate_base_fare(ride_request)
+    
+    return {
+        "base_fare": base_fare,
+        "surge_multiplier": surge,
+        "total_fare": base_fare * surge,
+        "surge_reason": f"Demand exceeds supply in {zone}"
+    }
+```
+
+### Surge Pricing Architecture
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Rider    │────→│ Pricing      │────→│ Zone        │
+│ requests │     │ Service      │     │ Aggregator  │
+│ ride     │     │              │     │ (counts     │
+│          │     │ Reads surge  │     │  supply &   │
+└──────────┘     │ multiplier   │     │  demand)    │
+                 └──────────────┘     └──────┬──────┘
+                                            │
+                 ┌──────────────┐     ┌──────▼──────┐
+                 │ Driver       │     │ Surge       │
+                 │ Location     │     │ Calculator  │
+                 │ Service      │     │ (per zone)  │
+                 └──────────────┘     └─────────────┘
+```
+
+### Surge Pricing Fairness
+
+| Concern | Solution |
+| --- | --- |
+| **Price gouging** | Cap maximum multiplier (e.g., 3.5x) |
+| **Predictability** | Show expected fare before booking |
+| **Transparency** | Explain why surge is active |
+| **Gradual changes** | Smooth surge transitions (no sudden 1x → 5x) |
+| **Rider notification** | "Surge is active. Estimated fare: $34" |
+| **Alternative suggestions** | "Wait 10 min for 1.5x surge" |
+
+---
+
+## ETA Calculation
+
+### What Is ETA?
+
+Estimated Time of Arrival — how long until the driver reaches the rider, or the rider reaches the destination.
+
+### ETA Components
+
+```
+Total ETA = Pickup ETA + Trip ETA
+
+Pickup ETA: How long until driver reaches rider
+  = Driving time from driver's current position to rider
+  - Adjusted for real-time traffic
+
+Trip ETA: How long for the full trip
+  = Driving time from pickup to destination
+  - Adjusted for real-time traffic
+  - Plus wait time (traffic lights, turns)
+```
+
+### ETA Calculation Methods
+
+**Method 1: Road Network + Traffic**
+
+```python
+def calculate_eta(origin_lat, origin_lon, dest_lat, dest_lon):
+    # 1. Find nearest nodes in road graph
+    origin_node = find_nearest_node(origin_lat, origin_lon)
+    dest_node = find_nearest_node(dest_lat, dest_lon)
+    
+    # 2. Run A* with traffic-adjusted weights
+    path = a_star(origin_node, dest_node, traffic_graph)
+    
+    # 3. Sum edge weights (time on each road segment)
+    total_seconds = sum(edge.time_with_traffic for edge in path)
+    
+    # 4. Add intersection delays
+    total_seconds += len(path) * INTERSECTION_DELAY  # ~5 sec each
+    
+    return total_seconds / 60  # Convert to minutes
+```
+
+**Method 2: Machine Learning**
+
+```python
+# ML model trained on historical trip data
+features = [
+    origin_lat, origin_lon,
+    dest_lat, dest_lon,
+    time_of_day,          # 8am rush vs 2am quiet
+    day_of_week,          # Monday vs Saturday
+    weather_condition,    # Rain = slower
+    current_traffic_speed,
+    road_type_ratio,      # Highway vs local roads
+    distance_km
+]
+
+predicted_eta = ml_model.predict(features)
+
+# ML advantage: captures patterns that simple algorithms miss
+# e.g., "This intersection always takes 3 minutes at 5pm on weekdays"
+```
+
+**Method 3: Hybrid**
+
+```python
+def hybrid_eta(origin, dest, trip_history=None):
+    # Base ETA from road network
+    base_eta = road_network_eta(origin, dest)
+    
+    # ML adjustment factor
+    ml_factor = ml_model.predict(features)
+    
+    # Historical average for this route
+    if trip_history:
+        historical_avg = average(trip_history)
+        # Weighted average
+        eta = 0.4 * base_eta + 0.4 * ml_factor + 0.2 * historical_avg
+    else:
+        eta = 0.6 * base_eta + 0.4 * ml_factor
+    
+    return round(eta, 1)
+```
+
+### ETA Update Strategy
+
+```
+Scenario: Driver is 8 minutes away, but traffic is changing
+
+Every 30 seconds:
+  1. Get driver's new position
+  2. Recalculate ETA with current traffic
+  3. Push update to rider via WebSocket
+
+Rider sees:
+  8 min → 7 min → 8 min → 6 min → 5 min → 3 min → Arrived!
+
+The ETA gets MORE accurate as driver gets closer.
+Early estimates have higher uncertainty.
+```
+
+### ETA Architecture
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Rider    │────→│ ETA          │────→│ Road Graph  │
+│ App      │     │ Service      │     │ + Traffic   │
+│ "When    │     │              │     │ Data        │
+│  will it │     │ Combines:    │     └─────────────┘
+│  arrive?"│     │ - Road graph │
+└──────────┘     │ - Traffic    │     ┌─────────────┐
+                 │ - ML model   │────→│ ML Model    │
+                 │ - History    │     │ (trained on │
+                 └──────────────┘     │  trip data) │
+                                      └─────────────┘
+```
+
+### ETA Accuracy Metrics
+
+| Metric | Target | How Measured |
+| --- | --- | --- |
+| **MAE (Mean Absolute Error)** | &lt; 2 minutes | Average absolute difference between predicted and actual |
+| **MAPE (Mean Absolute % Error)** | &lt; 15% | Percentage error normalized by trip duration |
+| **p90 error** | &lt; 3 minutes | 90th percentile of errors |
+| **Update frequency** | Every 30 seconds | How often ETA is recalculated |
+
+---

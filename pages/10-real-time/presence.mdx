@@ -1,0 +1,597 @@
+---
+title: Presence Systems
+---
+
+import { Callout } from 'nextra/components'
+
+# 10.3 Presence Systems
+
+> A presence system tracks whether users are online, offline, or away. Think of Discord's green dot, Slack's status indicators, or WhatsApp's "last seen". The challenge: doing this efficiently for millions of users in real time.
+
+---
+
+## Online/Offline Status
+
+### The Problem
+
+You need to answer:
+- Is user Alice online right now?
+- Show me all online friends
+- When did Alice go offline?
+
+Doing this naively with database queries is too slow for millions of users.
+
+### Architecture Overview
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ User's   │────→│ WebSocket    │────→│ Presence    │
+│ Device   │     │ Connection   │     │ Service     │
+│          │     │              │     │             │
+│ Sends    │     │ Maintains    │     │ Tracks      │
+│ heartbeat│     │ connection   │     │ online/offline│
+└──────────┘     └──────────────┘     └──────┬──────┘
+                                             │
+                                             ▼
+                                      ┌─────────────┐
+                                      │ Redis       │
+                                      │ (fast reads)│
+                                      │             │
+                                      │ user:123    │
+                                      │ status:online│
+                                      │ last_seen:ts│
+                                      └─────────────┘
+```
+
+### Presence Service Implementation
+
+```python
+import redis
+import json
+from datetime import datetime
+
+class PresenceService:
+    def __init__(self):
+        self.redis = redis.Redis()
+        self.HEARTBEAT_TIMEOUT = 30  # seconds
+    
+    def user_online(self, user_id, metadata=None):
+        """Mark user as online"""
+        pipe = self.redis.pipeline()
+        
+        # Set user status
+        pipe.hset(f"presence:{user_id}", mapping={
+            'status': 'online',
+            'last_seen': datetime.utcnow().isoformat(),
+            'metadata': json.dumps(metadata or {})
+        })
+        
+        # Add to online users set
+        pipe.sadd("online_users", user_id)
+        
+        # Set expiry (auto-offline if no heartbeat)
+        pipe.expire(f"presence:{user_id}", self.HEARTBEAT_TIMEOUT)
+        
+        pipe.execute()
+    
+    def user_offline(self, user_id):
+        """Mark user as offline"""
+        pipe = self.redis.pipeline()
+        
+        # Set status to offline
+        pipe.hset(f"presence:{user_id}", mapping={
+            'status': 'offline',
+            'last_seen': datetime.utcnow().isoformat()
+        })
+        
+        # Remove from online users set
+        pipe.srem("online_users", user_id)
+        
+        # Remove expiry (don't auto-expire offline users)
+        pipe.persist(f"presence:{user_id}")
+        
+        pipe.execute()
+    
+    def heartbeat(self, user_id):
+        """Refresh user's online status"""
+        self.redis.expire(f"presence:{user_id}", self.HEARTBEAT_TIMEOUT)
+        self.redis.hset(f"presence:{user_id}", 'last_seen',
+                       datetime.utcnow().isoformat())
+    
+    def is_online(self, user_id):
+        """Check if user is online"""
+        status = self.redis.hget(f"presence:{user_id}", 'status')
+        return status == b'online'
+    
+    def get_online_users(self):
+        """Get all online user IDs"""
+        return self.redis.smembers("online_users")
+    
+    def get_online_friends(self, user_id, friend_ids):
+        """Get which friends are online"""
+        pipe = self.redis.pipeline()
+        for friend_id in friend_ids:
+            pipe.hget(f"presence:{friend_id}", 'status')
+        results = pipe.execute()
+        
+        online = []
+        for friend_id, status in zip(friend_ids, results):
+            if status == b'online':
+                online.append(friend_id)
+        return online
+    
+    def get_last_seen(self, user_id):
+        """Get when user was last seen"""
+        last_seen = self.redis.hget(f"presence:{user_id}", 'last_seen')
+        if last_seen:
+            return datetime.fromisoformat(last_seen.decode())
+        return None
+```
+
+### Presence with WebSocket Integration
+
+```javascript
+class PresenceManager {
+  constructor(io, redis) {
+    this.io = io;
+    this.redis = redis;
+    this.userSockets = new Map(); // userId -> Set of socket IDs
+  }
+  
+  async handleConnection(socket, userId) {
+    // Track socket
+    if (!this.userSockets.has(userId)) {
+      this.userSockets.set(userId, new Set());
+    }
+    this.userSockets.get(userId).add(socket.id);
+    
+    // Mark online (first connection)
+    const wasOnline = await this.redis.hget(`presence:${userId}`, 'status');
+    await this.redis.hset(`presence:${userId}`, {
+      status: 'online',
+      last_seen: new Date().toISOString()
+    });
+    await this.redis.sadd('online_users', userId);
+    await this.redis.expire(`presence:${userId}`, 30);
+    
+    // Broadcast if newly online
+    if (wasOnline !== 'online') {
+      this.io.emit('user-status', { userId, status: 'online' });
+    }
+    
+    // Start heartbeat
+    socket.heartbeatInterval = setInterval(() => {
+      this.redis.expire(`presence:${userId}`, 30);
+    }, 10000);
+  }
+  
+  async handleDisconnect(socket, userId) {
+    // Remove socket
+    this.userSockets.get(userId)?.delete(socket.id);
+    
+    // Clear heartbeat
+    clearInterval(socket.heartbeatInterval);
+    
+    // If no more sockets for this user, mark offline
+    if (this.userSockets.get(userId)?.size === 0) {
+      this.userSockets.delete(userId);
+      
+      await this.redis.hset(`presence:${userId}`, {
+        status: 'offline',
+        last_seen: new Date().toISOString()
+      });
+      await this.redis.srem('online_users', userId);
+      await this.redis.persist(`presence:${userId}`);
+      
+      this.io.emit('user-status', { userId, status: 'offline' });
+    }
+  }
+}
+```
+
+### Presence Data Model
+
+```
+Redis Key Structure:
+
+presence:{user_id} (Hash):
+  status: "online" | "offline" | "away"
+  last_seen: "2026-07-02T10:30:00Z"
+  metadata: '{"device": "mobile", "app": "v2.1"}'
+
+online_users (Set):
+  user_id_1
+  user_id_2
+  ...
+
+user:{user_id}:friends (Set):
+  friend_id_1
+  friend_id_2
+  ...
+```
+
+---
+
+## Last Seen Timestamps
+
+### The Problem
+
+When a user goes offline, you want to show:
+- "Last seen 5 minutes ago"
+- "Last seen 2 hours ago"
+- "Last seen yesterday at 3:45 PM"
+
+### Implementation
+
+```python
+class LastSeenService:
+    def __init__(self):
+        self.redis = redis.Redis()
+    
+    def update_last_seen(self, user_id):
+        """Update when user was last active"""
+        now = datetime.utcnow()
+        
+        # Store as Unix timestamp for easy comparison
+        self.redis.hset(f"presence:{user_id}", mapping={
+            'last_seen': int(now.timestamp()),
+            'last_seen_iso': now.isoformat()
+        })
+    
+    def get_last_seen(self, user_id):
+        """Get formatted last seen string"""
+        timestamp = self.redis.hget(f"presence:{user_id}", 'last_seen')
+        if not timestamp:
+            return None
+        
+        last_seen = datetime.fromtimestamp(int(timestamp))
+        now = datetime.utcnow()
+        diff = now - last_seen
+        
+        if diff.total_seconds() < 60:
+            return "Just now"
+        elif diff.total_seconds() < 3600:
+            minutes = int(diff.total_seconds() / 60)
+            return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+        elif diff.total_seconds() < 86400:
+            hours = int(diff.total_seconds() / 3600)
+            return f"{hours} hour{'s' if hours > 1 else ''} ago"
+        elif diff.days == 1:
+            return f"Yesterday at {last_seen.strftime('%I:%M %p')}"
+        elif diff.days < 7:
+            return last_seen.strftime('%A at %I:%M %p')
+        else:
+            return last_seen.strftime('%B %d at %I:%M %p')
+    
+    def get_last_seen_batch(self, user_ids):
+        """Get last seen for multiple users"""
+        pipe = self.redis.pipeline()
+        for user_id in user_ids:
+            pipe.hget(f"presence:{user_id}", 'last_seen')
+        timestamps = pipe.execute()
+        
+        results = {}
+        for user_id, timestamp in zip(user_ids, timestamps):
+            if timestamp:
+                last_seen = datetime.fromtimestamp(int(timestamp))
+                results[user_id] = self.format_relative_time(last_seen)
+            else:
+                results[user_id] = "Never"
+        
+        return results
+    
+    def format_relative_time(self, datetime_obj):
+        now = datetime.utcnow()
+        diff = now - datetime_obj
+        
+        if diff.total_seconds() < 60:
+            return "Just now"
+        elif diff.total_seconds() < 3600:
+            minutes = int(diff.total_seconds() / 60)
+            return f"{minutes}m ago"
+        elif diff.total_seconds() < 86400:
+            hours = int(diff.total_seconds() / 3600)
+            return f"{hours}h ago"
+        elif diff.days < 7:
+            days = diff.days
+            return f"{days}d ago"
+        else:
+            return datetime_obj.strftime('%b %d')
+```
+
+### Privacy Considerations
+
+```
+Not everyone wants to show last seen:
+
+User preferences:
+  - Everyone can see
+  - Contacts only
+  - Nobody
+  
+Implementation:
+  Store preference in user profile:
+  last_seen_visibility: "everyone" | "contacts" | "nobody"
+  
+  When querying last seen:
+  if user.last_seen_visibility == "nobody":
+      return "Online" or "Offline" (no timestamp)
+  if user.last_seen_visibility == "contacts":
+      if requester not in user.contacts:
+          return "Online" or "Offline"
+  return last_seen_timestamp
+```
+
+---
+
+## Heartbeat Mechanisms
+
+### The Problem
+
+How do you know if a user is actually online? What if:
+- Their laptop goes to sleep?
+- Their internet drops for 30 seconds?
+- Their browser tab is in the background?
+
+**Heartbeats** solve this by having clients send periodic "I'm alive" signals.
+
+### The Mental Model
+
+Think of heartbeats like a **pulse**:
+
+```
+No heartbeat: "Are you alive?" → "Yes!" → ... → (silence) → "Are you alive?" → "Yes!"
+With heartbeat: "beep... beep... beep..." → (silence) → "Must be dead"
+```
+
+### Heartbeat Patterns
+
+```
+Pattern 1: Client sends heartbeat
+  Client → Server: "heartbeat" (every 30 seconds)
+  Server: Reset timeout timer
+  If no heartbeat in 30s → Mark offline
+
+Pattern 2: Server pings client
+  Server → Client: "ping"
+  Client → Server: "pong"
+  If no pong in 30s → Mark offline
+
+Pattern 3: Activity-based
+  User sends message → Reset timer
+  User scrolls → Reset timer
+  If no activity in 5 minutes → Mark as "away"
+  If no activity in 30 minutes → Mark as "offline"
+```
+
+### Heartbeat Implementation (WebSocket)
+
+```javascript
+// Server side
+class HeartbeatManager {
+  constructor(io) {
+    this.io = io;
+    this.HEARTBEAT_INTERVAL = 30000;  // 30 seconds
+    this.HEARTBEAT_TIMEOUT = 45000;   // 45 seconds (1.5x interval)
+  }
+  
+  setup(socket, userId) {
+    // Server pings client
+    socket.heartbeatInterval = setInterval(() => {
+      if (socket.isAlive === false) {
+        // Missed previous heartbeat
+        console.log(`User ${userId} missed heartbeat, disconnecting`);
+        return socket.terminate();
+      }
+      
+      socket.isAlive = false;
+      socket.ping();
+    }, this.HEARTBEAT_INTERVAL);
+    
+    // Client responds with pong
+    socket.on('pong', () => {
+      socket.isAlive = true;
+      this.updatePresence(userId);
+    });
+    
+    // Clean up on disconnect
+    socket.on('disconnect', () => {
+      clearInterval(socket.heartbeatInterval);
+    });
+  }
+  
+  updatePresence(userId) {
+    // Reset Redis expiry
+    this.redis.expire(`presence:${userId}`, this.HEARTBEAT_TIMEOUT / 1000);
+  }
+}
+
+// Client side
+class ClientHeartbeat {
+  constructor(socket) {
+    this.socket = socket;
+  }
+  
+  start() {
+    // Respond to server pings
+    this.socket.on('ping', () => {
+      this.socket.emit('pong');
+    });
+    
+    // Send activity updates
+    this.socket.on('mousemove', () => {
+      this.reportActivity();
+    });
+    
+    this.socket.on('keypress', () => {
+      this.reportActivity();
+    });
+    
+    // Visibility change (tab focus/blur)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        this.socket.emit('tab-active');
+      } else {
+        this.socket.emit('tab-inactive');
+      }
+    });
+  }
+  
+  reportActivity() {
+    this.socket.emit('activity', {
+      timestamp: Date.now(),
+      type: 'active'
+    });
+  }
+}
+```
+
+### Heartbeat Efficiency
+
+**Problem:** 1 million users × heartbeat every 30 seconds = 33,333 heartbeats/second
+
+**Solutions:**
+
+```
+1. Batch heartbeats:
+   Instead of individual messages, batch:
+   Server sends: "heartbeat_request" to all
+   Clients respond in random window (1-5 seconds)
+   Server collects responses in batch
+
+2. Adaptive intervals:
+   Active user (sending messages): No heartbeat needed
+   Idle user (no activity): Heartbeat every 30s
+   Background tab: Heartbeat every 60s
+   Mobile app (screen off): Heartbeat every 5 minutes
+
+3. Connection-level detection:
+   WebSocket ping/pong (built into protocol)
+   TCP keepalive (operating system level)
+   Load balancer health checks
+```
+
+### Activity-Based Presence States
+
+```python
+class ActivityPresence:
+    STATES = {
+        'online': {'timeout': 300},      # 5 minutes
+        'away': {'timeout': 1800},        # 30 minutes
+        'offline': {'timeout': None}      # Manual disconnect
+    }
+    
+    def __init__(self):
+        self.redis = redis.Redis()
+    
+    def update_activity(self, user_id, activity_type='active'):
+        """Update user activity and presence state"""
+        now = datetime.utcnow()
+        
+        pipe = self.redis.pipeline()
+        
+        # Update last activity timestamp
+        pipe.hset(f"presence:{user_id}", mapping={
+            'last_activity': int(now.timestamp()),
+            'activity_type': activity_type
+        })
+        
+        # Set current state based on activity
+        if activity_type in ['typing', 'scrolling', 'clicking']:
+            pipe.hset(f"presence:{user_id}", 'status', 'online')
+            pipe.expire(f"presence:{user_id}", 300)
+        elif activity_type == 'idle':
+            pipe.hset(f"presence:{user_id}", 'status', 'away')
+            pipe.expire(f"presence:{user_id}", 1800)
+        
+        pipe.execute()
+    
+    def check_stale_users(self):
+        """Periodic task to update stale presences"""
+        now = datetime.utcnow()
+        
+        # Find users with stale activity
+        online_users = self.redis.smembers("online_users")
+        
+        for user_id in online_users:
+            last_activity = self.redis.hget(
+                f"presence:{user_id}", 'last_activity'
+            )
+            
+            if last_activity:
+                elapsed = (now - datetime.fromtimestamp(
+                    int(last_activity)
+                )).total_seconds()
+                
+                if elapsed > 300:  # 5 minutes
+                    # Mark as away
+                    self.redis.hset(f"presence:{user_id}",
+                                  'status', 'away')
+                
+                if elapsed > 1800:  # 30 minutes
+                    # Mark as offline
+                    self.redis.hset(f"presence:{user_id}",
+                                  'status', 'offline')
+                    self.redis.srem("online_users", user_id)
+```
+
+### Heartbeat Implementation with Redis
+
+```python
+import redis
+import time
+
+class RedisHeartbeat:
+    def __init__(self):
+        self.redis = redis.Redis()
+        self.HEARTBEAT_KEY = "heartbeat:{user_id}"
+        self.HEARTBEAT_TTL = 60  # seconds
+    
+    def register_heartbeat(self, user_id):
+        """Register a heartbeat for a user"""
+        key = self.HEARTBEAT_KEY.format(user_id=user_id)
+        self.redis.setex(key, self.HEARTBEAT_TTL, int(time.time()))
+    
+    def is_alive(self, user_id):
+        """Check if user has sent a heartbeat recently"""
+        key = self.HEARTBEAT_KEY.format(user_id=user_id)
+        return self.redis.exists(key)
+    
+    def get_alive_users(self, user_ids):
+        """Get which users are alive"""
+        pipe = self.redis.pipeline()
+        for user_id in user_ids:
+            pipe.exists(self.HEARTBEAT_KEY.format(user_id=user_id))
+        results = pipe.execute()
+        
+        return [uid for uid, alive in zip(user_ids, results) if alive]
+    
+    def cleanup_stale(self):
+        """Remove users who haven't sent heartbeats"""
+        # Redis automatically deletes expired keys
+        # But we can also manually check
+        pattern = self.HEARTBEAT_KEY.format(user_id='*')
+        stale_keys = []
+        
+        for key in self.redis.scan_iter(match=pattern):
+            ttl = self.redis.ttl(key)
+            if ttl == -2:  # Key doesn't exist
+                user_id = key.decode().split(':')[1]
+                stale_keys.append(user_id)
+        
+        return stale_keys
+```
+
+### Heartbeat Best Practices
+
+| Practice | Description |
+| --- | --- |
+| **Use exponential backoff** | If heartbeat fails, wait longer before retrying |
+| **Add jitter** | Randomize heartbeat timing to prevent thundering herd |
+| **Adapt to activity** | Active users need fewer heartbeats |
+| **Use connection-level detection** | WebSocket ping/pong is more efficient than app-level heartbeats |
+| **Set appropriate timeouts** | Too short = false disconnects; Too long = stale status |
+| **Batch where possible** | Reduce overhead by batching heartbeats |
+| **Monitor heartbeat health** | Track miss rates to detect network issues |
+
+---

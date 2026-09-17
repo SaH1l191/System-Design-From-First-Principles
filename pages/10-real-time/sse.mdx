@@ -1,0 +1,341 @@
+---
+title: Server-Sent Events, Long Polling & Short Polling
+---
+
+import { Callout } from 'nextra/components'
+
+## Server-Sent Events (SSE)
+
+### The Problem
+
+WebSockets are great for **bidirectional** communication. But what if you only need **one-way** — server to client?
+
+```
+Use cases:
+  - Live news feed: Server pushes articles, client never sends data back
+  - Stock ticker: Server pushes prices, client just displays them
+  - Notification feed: Server pushes alerts, client acknowledges later
+  
+These don't need bidirectional. WebSockets are overkill.
+```
+
+### The Mental Model
+
+Think of SSE as a **one-way radio broadcast**. The server is the radio station, and clients are radios. The station keeps broadcasting, and radios just listen.
+
+```
+WebSocket:  Client ←→ Server (two-way radio)
+SSE:        Client ← Server (one-way radio broadcast)
+```
+
+### How SSE Works
+
+SSE uses **regular HTTP** with a special content type. No upgrade, no handshake — just a long-lived HTTP response.
+
+```
+Client → Server:
+  GET /events HTTP/1.1
+  Accept: text/event-stream
+
+Server → Client:
+  HTTP/1.1 200 OK
+  Content-Type: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+  
+  data: {"price": 100.50}\n\n
+  data: {"price": 100.75}\n\n
+  data: {"price": 101.00}\n\n
+  ... (keeps sending, connection stays open)
+```
+
+### SSE Message Format
+
+```
+Each message follows this format:
+
+data: <payload>\n\n
+
+Examples:
+  data: {"user": "Alice", "message": "Hello"}\n\n
+  data: Hello World\n\n
+  data: Line 1\ndata: Line 2\n\n
+
+Fields:
+  data:    The message payload (required)
+  id:      Event ID (for reconnection)
+  event:   Event type (for different handlers)
+  retry:   Reconnection interval in ms
+```
+
+**Event types:**
+
+```
+event: user-connected
+data: {"user_id": 123}
+
+event: message
+data: {"text": "Hello!"}
+
+event: price-update
+data: {"symbol": "AAPL", "price": 150.25}
+```
+
+### SSE Implementation (Node.js)
+
+```javascript
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/events') {
+    // Set SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    // Send initial connection event
+    res.write('event: connected\n');
+    res.write('data: {"status": "connected"}\n\n');
+    
+    // Send updates every 2 seconds
+    const interval = setInterval(() => {
+      const data = JSON.stringify({
+        price: (100 + Math.random() * 10).toFixed(2),
+        timestamp: Date.now()
+      });
+      res.write(`data: ${data}\n\n`);
+    }, 2000);
+    
+    // Clean up on disconnect
+    req.on('close', () => {
+      clearInterval(interval);
+    });
+  }
+});
+
+server.listen(8080);
+```
+
+### SSE with Event IDs and Reconnection
+
+```javascript
+// Server side
+let eventId = 0;
+
+function sendEvent(res, eventType, data) {
+  eventId++;
+  res.write(`id: ${eventId}\n`);
+  res.write(`event: ${eventType}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+// Client side (JavaScript)
+const eventSource = new EventSource('/events');
+
+// Listen for specific event types
+eventSource.addEventListener('price-update', (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Price:', data.price);
+});
+
+// Handle reconnection
+eventSource.addEventListener('error', (event) => {
+  if (eventSource.readyState === EventSource.CONNECTING) {
+    console.log('Reconnecting...');
+  }
+});
+
+// Send last event ID for resuming
+// Browser automatically sends Last-Event-ID header on reconnect
+```
+
+### SSE vs WebSockets
+
+| Feature | SSE | WebSocket |
+| --- | --- | --- |
+| **Direction** | Server → Client only | Bidirectional |
+| **Protocol** | HTTP | WebSocket (ws://) |
+| **Binary data** | Text only | Text and binary |
+| **Reconnection** | Built-in (automatic) | Manual |
+| **Event IDs** | Built-in | Manual |
+| **HTTP caching** | Supported | Not supported |
+| **Firewall friendly** | Yes (regular HTTP) | Sometimes blocked |
+| **Max connections** | ~6 per browser (HTTP/1.1) | ~6 per browser |
+| **Complexity** | Low | Medium |
+
+### When to Use SSE
+
+- **Live feeds:** News, social media updates
+- **Real-time dashboards:** Monitoring, analytics
+- **Stock tickers:** Price updates (one-way)
+- **Notifications:** Push alerts from server
+- **Event feeds:** Activity logs, audit trails
+
+---
+
+## Long Polling
+
+### The Problem
+
+What if you need real-time updates but can't use WebSockets or SSE? Maybe your infrastructure doesn't support them, or you need maximum browser compatibility.
+
+### The Mental Model
+
+Think of long polling as **asking a question and waiting**.
+
+```
+Short Polling:     "Any news?" → "No" → "Any news?" → "No" → "Any news?" → "Yes!"
+                   (wasteful, many empty requests)
+
+Long Polling:      "Any news?" → Server holds request... waits... waits...
+                   → "Yes, here!" → Client immediately asks again
+                   → Server holds... → "Nothing yet..." → Client asks again
+```
+
+### How Long Polling Works
+
+```
+1. Client sends HTTP request to server
+2. Server DOES NOT respond immediately
+3. Server HOLDS the connection open
+4. When data is available, server responds
+5. Client immediately opens a new connection
+6. Repeat
+
+Timeline:
+  Client: GET /poll → Server: (holding...)
+                                    → Server: 200 OK {data} → Client: GET /poll → Server: (holding...)
+                                                                                        → Server: 200 OK {data}
+```
+
+### Long Polling Implementation
+
+```javascript
+// Server (Node.js/Express)
+app.get('/poll', async (req, res) => {
+  const lastEventId = req.headers['last-event-id'] || 0;
+  
+  // Wait for new events (with timeout)
+  const event = await waitForEvent(lastEventId, 30000); // 30s timeout
+  
+  if (event) {
+    res.json(event);
+  } else {
+    // Timeout — send empty response
+    res.status(204).end();
+  }
+});
+
+// Client (JavaScript)
+async function longPoll() {
+  while (true) {
+    try {
+      const response = await fetch('/poll', {
+        headers: {
+          'Last-Event-Id': lastEventId
+        }
+      });
+      
+      if (response.ok) {
+        const event = await response.json();
+        lastEventId = event.id;
+        processEvent(event);
+      }
+    } catch (error) {
+      console.error('Polling error:', error);
+      await sleep(1000); // Back off on error
+    }
+    
+    // Immediately reconnect
+    // (no delay between requests)
+  }
+}
+```
+
+### Long Polling Pros and Cons
+
+| Pros | Cons |
+| --- | --- |
+| Works everywhere (pure HTTP) | Resource intensive (holding connections) |
+| Firewall/proxy friendly | Not truly real-time (has delay) |
+| Automatic fallback from SSE/WebSocket | Server must handle many pending connections |
+| Simple to implement | No binary data support |
+| Browser compatible | Reconnection overhead |
+
+---
+
+## Short Polling
+
+### The Mental Model
+
+Short polling is the simplest approach: **keep asking**.
+
+```
+Like checking your mailbox:
+  Walk to mailbox → Empty → Go back inside
+  Wait 5 minutes → Walk to mailbox → Empty → Go back inside
+  Wait 5 minutes → Walk to mailbox → Letter! → Read it
+```
+
+### How Short Polling Works
+
+```
+1. Client sends HTTP request
+2. Server responds immediately (with or without data)
+3. Client waits a fixed interval
+4. Client sends another request
+5. Repeat
+
+Timeline:
+  Client: GET /poll → Server: 200 OK {data}
+  Client: (wait 5 seconds)
+  Client: GET /poll → Server: 200 OK (no data)
+  Client: (wait 5 seconds)
+  Client: GET /poll → Server: 200 OK {data}
+```
+
+### Short Polling Implementation
+
+```javascript
+// Server (Node.js/Express)
+app.get('/poll', (req, res) => {
+  const events = getNewEvents();
+  res.json(events);
+});
+
+// Client (JavaScript)
+function startPolling() {
+  setInterval(async () => {
+    const response = await fetch('/poll');
+    const events = await response.json();
+    
+    events.forEach(event => {
+      processEvent(event);
+    });
+  }, 5000); // Poll every 5 seconds
+}
+
+startPolling();
+```
+
+### Short Polling vs Long Polling
+
+| Feature | Short Polling | Long Polling |
+| --- | --- | --- |
+| **Latency** | Up to polling interval | Near real-time |
+| **Server load** | High (constant requests) | Medium (held connections) |
+| **Bandwidth** | Wasteful (empty responses) | Efficient (only when data) |
+| **Complexity** | Very low | Low |
+| **Real-time feel** | Poor | Good |
+
+### When to Use Short Polling
+
+- **Very simple apps** where latency doesn't matter
+- **Infrequent updates** (e.g., check once per minute)
+- **Fallback** when nothing else works
+- **Legacy systems** with no other option
+
+---

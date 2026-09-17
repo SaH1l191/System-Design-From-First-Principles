@@ -1,0 +1,373 @@
+---
+title: Socket.IO & Real-Time Notification Systems
+---
+
+import { Callout } from 'nextra/components'
+
+## Socket.IO
+
+### The Problem
+
+WebSockets are powerful but have issues:
+- No automatic reconnection
+- No fallback if WebSockets are blocked
+- No rooms/channels built-in
+- No automatic reconnection handling
+- Different browsers behave differently
+
+**Socket.IO solves all of these.**
+
+### The Mental Model
+
+Think of Socket.IO as **WebSockets with training wheels**. It handles all the edge cases so you don't have to.
+
+```
+WebSockets: Raw, powerful, but you build everything yourself
+Socket.IO:  Batteries included — reconnection, rooms, fallbacks, broadcasting
+```
+
+### How Socket.IO Works
+
+Socket.IO is NOT just WebSockets. It's a protocol that **negotiates** the best transport:
+
+```
+1. Client connects to Socket.IO server
+2. Server and client negotiate transport:
+   - Can we use WebSockets? → Yes → Use WebSockets
+   - No? → Use HTTP long polling
+3. If connection drops → Automatic reconnection
+4. If server has new data → Push to client
+```
+
+**Transport negotiation:**
+
+```
+Step 1: HTTP Long Polling (initial)
+  Client → Server: GET /socket.io/?transport=polling
+  Server → Client: { "sid": "abc123", "upgrades": ["websocket"] }
+
+Step 2: Upgrade to WebSocket
+  Client → Server: GET /socket.io/?transport=websocket&sid=abc123
+  Server → Client: 101 Switching Protocols
+  
+Step 3: WebSocket communication
+  Client ←→ WebSocket ←→ Server
+```
+
+### Socket.IO Implementation
+
+**Server (Node.js):**
+
+```javascript
+const { Server } = require('socket.io');
+const http = require('http');
+
+const server = http.createServer();
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Track online users
+const onlineUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+  
+  // User comes online
+  socket.on('user-online', (userId) => {
+    onlineUsers.set(userId, socket.id);
+    io.emit('user-status', { userId, status: 'online' });
+  });
+  
+  // Join a chat room
+  socket.on('join-room', (roomId) => {
+    socket.join(roomId);
+    console.log(`User ${socket.id} joined room ${roomId}`);
+  });
+  
+  // Send message to room
+  socket.on('send-message', (data) => {
+    io.to(data.roomId).emit('new-message', {
+      user: data.user,
+      message: data.message,
+      timestamp: Date.now()
+    });
+  });
+  
+  // Broadcast to all except sender
+  socket.on('typing', (data) => {
+    socket.broadcast.emit('user-typing', {
+      userId: data.userId,
+      roomId: data.roomId
+    });
+  });
+  
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    // Find and remove user
+    for (const [userId, socketId] of onlineUsers) {
+      if (socketId === socket.id) {
+        onlineUsers.delete(userId);
+        io.emit('user-status', { userId, status: 'offline' });
+        break;
+      }
+    }
+    console.log('User disconnected:', socket.id);
+  });
+});
+
+server.listen(3000);
+```
+
+**Client (JavaScript):**
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:3000');
+
+// Connect
+socket.on('connect', () => {
+  console.log('Connected:', socket.id);
+  socket.emit('user-online', currentUserId);
+});
+
+// Receive messages
+socket.on('new-message', (data) => {
+  displayMessage(data.user, data.message);
+});
+
+// User status changes
+socket.on('user-status', (data) => {
+  updateUserStatus(data.userId, data.status);
+});
+
+// Typing indicators
+socket.on('user-typing', (data) => {
+  showTypingIndicator(data.userId);
+});
+
+// Send message
+function sendMessage(roomId, message) {
+  socket.emit('send-message', {
+    roomId,
+    message,
+    user: currentUser
+  });
+}
+
+// Join room
+function joinRoom(roomId) {
+  socket.emit('join-room', roomId);
+}
+
+// Disconnect
+socket.on('disconnect', () => {
+  console.log('Disconnected from server');
+});
+```
+
+### Socket.IO Namespaces
+
+Namespaces let you split your socket server into logical channels:
+
+```javascript
+// Server
+const chatNamespace = io.of('/chat');
+const notificationNamespace = io.of('/notifications');
+
+chatNamespace.on('connection', (socket) => {
+  console.log('Chat user connected');
+  socket.on('send-message', (data) => {
+    chatNamespace.emit('new-message', data);
+  });
+});
+
+notificationNamespace.on('connection', (socket) => {
+  console.log('Notification listener connected');
+  // Handle notifications separately
+});
+
+// Client
+const chatSocket = io('http://localhost:3000/chat');
+const notifSocket = io('http://localhost:3000/notifications');
+```
+
+### Socket.IO Rooms
+
+Rooms are a way to broadcast to a subset of connected clients:
+
+```javascript
+// Server
+io.on('connection', (socket) => {
+  // Join specific rooms
+  socket.join('room-1');
+  socket.join('room-2');
+  
+  // Send to specific room only
+  io.to('room-1').emit('message', 'Hello room 1!');
+  
+  // Send to all except sender in a room
+  socket.to('room-1').emit('message', 'Hello everyone except me!');
+  
+  // Get all sockets in a room
+  const roomSockets = io.sockets.adapter.rooms.get('room-1');
+  console.log('Users in room:', roomSockets.size);
+});
+```
+
+### Socket.IO vs WebSockets
+
+| Feature | Socket.IO | Raw WebSocket |
+| --- | --- | --- |
+| **Transport** | WebSocket + HTTP fallback | WebSocket only |
+| **Reconnection** | Automatic | Manual |
+| **Rooms/Namespaces** | Built-in | Build yourself |
+| **Broadcasting** | Built-in | Build yourself |
+| **Protocol** | Custom (not WebSocket) | Standard WebSocket |
+| **Overhead** | Higher (extra protocol layer) | Lower |
+| **Browser support** | All (including old) | Modern browsers |
+| **Binary data** | Supported | Supported |
+
+### When to Use Socket.IO
+
+- **Chat applications:** Rooms, namespaces, broadcasting built-in
+- **Real-time games:** Automatic reconnection is critical
+- **Collaborative apps:** Google Docs-like editing
+- **When you need fallback:** Clients behind strict firewalls
+- **Rapid development:** Less boilerplate than raw WebSockets
+
+---
+
+## Real-Time Notification Systems
+
+### The Problem
+
+Your app needs to notify users about events in real time:
+- New message received
+- Order status updated
+- Friend request
+- Payment confirmed
+- System alert
+
+### Architecture Overview
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Event    │────→│ Notification │────→│ Delivery    │
+│ Source   │     │ Service      │     │ Service     │
+│ (orders, │     │              │     │             │
+│  chat,   │     │ Routes to:   │     │ WebSocket   │
+│  etc.)   │     │ - WebSocket  │     │ Push        │
+└──────────┘     │ - Push       │     │ Notification│
+                 │ - Email      │     └─────────────┘
+                 │ - SMS        │
+                 └──────────────┘
+```
+
+### Notification Service Implementation
+
+```python
+class NotificationService:
+    def __init__(self):
+        self.websocket_manager = WebSocketManager()
+        self.push_service = PushNotificationService()
+        self.email_service = EmailService()
+        self.sms_service = SMSService()
+    
+    async def send_notification(self, user_id, notification):
+        # 1. Store notification in database
+        await self.store_notification(user_id, notification)
+        
+        # 2. Get user preferences
+        preferences = await self.get_user_preferences(user_id)
+        
+        # 3. Deliver based on preferences and user status
+        if await self.is_user_online(user_id):
+            # Real-time via WebSocket
+            await self.websocket_manager.send_to_user(user_id, notification)
+        
+        if preferences.push_enabled:
+            # Mobile push notification
+            await self.push_service.send(user_id, notification)
+        
+        if preferences.email_enabled and notification.priority == 'high':
+            # Email for high-priority
+            await self.email_service.send(user_id, notification)
+        
+        if preferences.sms_enabled and notification.critical:
+            # SMS for critical alerts
+            await self.sms_service.send(user_id, notification)
+    
+    async def store_notification(self, user_id, notification):
+        # Store for offline users to see later
+        await db.notifications.insert({
+            'user_id': user_id,
+            'title': notification.title,
+            'body': notification.body,
+            'type': notification.type,
+            'read': False,
+            'created_at': datetime.utcnow()
+        })
+```
+
+### Notification Batching
+
+**Problem:** User gets 100 messages in a minute. Don't send 100 notifications!
+
+```python
+class NotificationBatcher:
+    def __init__(self):
+        self.batches = {}  # user_id -> [notifications]
+        self.timers = {}   # user_id -> timer
+    
+    async def add_notification(self, user_id, notification):
+        if user_id not in self.batches:
+            self.batches[user_id] = []
+        
+        self.batches[user_id].append(notification)
+        
+        # Reset timer (debounce)
+        if user_id in self.timers:
+            self.timers[user_id].cancel()
+        
+        self.timers[user_id] = asyncio.create_task(
+            self.flush_after_delay(user_id, delay=5.0)
+        )
+    
+    async def flush_after_delay(self, user_id, delay):
+        await asyncio.sleep(delay)
+        
+        notifications = self.batches.pop(user_id, [])
+        if notifications:
+            if len(notifications) == 1:
+                # Single notification
+                await self.send_single(user_id, notifications[0])
+            else:
+                # Batch into summary
+                await self.send_batch(user_id, notifications)
+```
+
+### Notification Priority Levels
+
+| Priority | Use Case | Delivery |
+| --- | --- | --- |
+| **Critical** | Security alerts, payment failures | Push + SMS + Email + WebSocket |
+| **High** | Order updates, messages | Push + WebSocket |
+| **Medium** | Friend requests, mentions | Push |
+| **Low** | Likes, comments, suggestions | In-app only (stored) |
+
+### When to Use Each Notification Type
+
+| Type | When to Use |
+| --- | --- |
+| **WebSocket** | User is online, needs instant delivery |
+| **Push notification** | User is on mobile, wants to be notified |
+| **Email** | Non-urgent, needs a record, marketing |
+| **SMS** | Critical alerts, 2FA, time-sensitive |
+| **In-app** | Low priority, user checks later |
+
+---

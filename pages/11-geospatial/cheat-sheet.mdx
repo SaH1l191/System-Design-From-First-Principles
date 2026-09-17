@@ -1,0 +1,180 @@
+---
+title: Interview Cheat Sheet — Stage 11
+---
+
+import { Callout } from 'nextra/components'
+
+# Quick Reference: Stage 11 Decision Framework
+
+## Spatial Data Structure Selection
+
+```
+Points only, static data, in-memory    → QuadTree
+Points, nearest-neighbor, in-memory    → KD Tree
+Points on disk, read-heavy             → BKD Tree (Elasticsearch)
+Points + polygons + regions            → R-Tree (PostGIS)
+Simple nearby search, Redis            → Geohash
+Ride-sharing, delivery zones           → H3 (Hexagonal)
+Global Earth indexing, MongoDB         → S2 (Google)
+```
+
+## Location Service Selection
+
+```
+"Find nearby X"                    → Redis GEO + Geohash/H3
+"A to B routing"                   → A* on road graph (OSM data)
+"Track vehicles in real-time"      → WebSocket + Kafka + Redis GEO
+"Dynamic pricing by zone"          → H3 hexagons + supply/demand ratio
+"ETA for trip"                     → Road graph + traffic + ML model
+"Enter/exit boundary"              → Geo-fencing (circular or polygon)
+```
+
+## Technology Stack
+
+| Component | Technology |
+| --- | --- |
+| **Spatial Index** | Redis GEO, PostGIS, H3, Elasticsearch geo_point |
+| **Road Graph** | OpenStreetMap (OSM), Google Directions API |
+| **Real-time Updates** | WebSocket, Server-Sent Events, gRPC streaming |
+| **Event Stream** | Apache Kafka, Redis Streams |
+| **Location Storage** | Redis (hot), PostgreSQL/PostGIS (warm), S3 (cold) |
+| **ML/ETA** | scikit-learn, TensorFlow, custom models |
+
+---
+
+# Interview Cheat Sheet: Stage 11
+
+## Geospatial Data Structures
+
+- **Latitude/Longitude:** Foundation of all geospatial data. Latitude = north/south (−90° to +90°), Longitude = east/west (−180° to +180°). Always stored as (lat, lon).
+- **B-Tree:** The most important data structure in databases. Keeps sorted keys packed on disk. Range queries are one seek + sweep. Every spatial index either is a B-Tree variant or tries to become one.
+- **QuadTree:** 2D space → 4 quadrants. Good for points. O(log n) query. Divides space into fixed squares. Can't naturally group irregular shapes like parks. Pointer-heavy (bad for disk).
+- **KD Tree:** Alternates splits on X and Y per level. Binary tree for multi-dimensional data. Good in memory. Same disk problem as QuadTree.
+- **BKD Tree:** Block KD Tree. Packs points into disk-page-sized blocks. Used by Elasticsearch. Write-once design (bad for moving data).
+- **R-Tree:** B-Tree for spatial data. Handles points + polygons + regions. Used in PostGIS. Groups objects into bounding rectangles. MBR at each node. Can handle overlapping regions.
+- **Geohash:** Convert lat/lon to string (or integer). Prefix matching = nearby. Check 8 neighbors for edge cases. Best for points, not polygons. Redis stores as 52-bit integer in a sorted set.
+- **S2:** Google's spherical indexing. Projects Earth onto cube faces. Nearly equal-area cells globally. Used by MongoDB. Handles anti-meridian correctly.
+- **H3:** Uber's hexagonal grid. Uniform neighbors. 16 resolution levels. Great for ride-sharing. Hexagons have 6 equidistant neighbors (squares have uneven distances).
+- **Geo-fence:** Virtual boundary. Circular or polygon. Trigger on enter/exit.
+
+## Key Concept: The Two Camps
+
+- **Camp 1 — Custom Spatial Trees:** R-Tree, BKD Tree. Understand shapes and polygons. Exact answers. Need spatial extensions. Writes can be expensive.
+- **Camp 2 — Encoded Keys:** Geohash, S2, H3. Convert lat/lon to single integer. Use regular B-Tree. Simple, fast, cheap writes. Best for points at scale.
+- **Rule of thumb:** Need shapes? → R-Tree. Need points with heavy writes? → Encoded keys.
+
+## Key Concept: Why R-Tree > QuadTree for Maps
+
+- QuadTree divides space into fixed squares → parks/rivers span multiple squares
+- R-Tree groups objects into bounding rectangles → one park = one rectangle
+- Geohash also uses fixed cells → same problem as QuadTree for polygons
+- R-Tree is the right choice for GIS, PostGIS, and complex geographic shapes
+
+## Key Concept: Post-Filtering
+
+- Encoded keys (Geohash, S2, H3) give you **candidates**, not exact results
+- Always post-filter by exact distance to drop false positives
+- The 3x3 trick (query 9 cells) ensures no boundary misses
+
+## Location-Based Services
+
+- **Nearby Search:** Redis GEO or H3 grid_disk. O(log n) with spatial index.
+- **Route Optimization:** A* algorithm on road graph. Traffic-adjusted edge weights.
+- **Real-Time Tracking:** GPS updates → Kafka → WebSocket push to clients. Adaptive frequency.
+- **Surge Pricing:** Supply/demand ratio per geographic zone. Cap maximum multiplier.
+- **ETA:** Road graph + traffic + ML. Update every 30 seconds. Gets more accurate as driver approaches.
+
+## Key Interview Points
+
+> "The shard key for geospatial data is the geohash or H3 cell — it determines which server holds which region's data."
+
+> "For nearby search, Redis GEO is the fastest option for &lt; 10km queries. For complex polygon queries, use PostGIS with R-Tree indexing."
+
+> "Real-time tracking requires: (1) efficient ingestion via Kafka, (2) spatial index for nearby queries, (3) WebSocket for push updates to clients."
+
+> "Surge pricing is a supply/demand problem per geographic zone. H3 hexagons provide natural zones with uniform size."
+
+> "ETA calculation combines: (1) shortest path on road graph, (2) real-time traffic adjustments, (3) ML predictions trained on historical trip data."
+
+---
+
+# Key Terms Glossary
+
+Every term you need to know for geospatial system design interviews.
+
+| Term | Definition |
+| --- | --- |
+| **Database** | Software that stores data and lets you search it quickly. |
+| **Index** | A data structure that makes searching fast (like a textbook index). |
+| **B-Tree** | A sorted index for one-dimensional data. The most important data structure in databases — stays balanced, packs keys into disk pages, range queries are one seek + sweep. |
+| **Range query** | Find all values between two limits (e.g., "all ages between 20 and 30" or "all drivers within 2km"). |
+| **Latitude** | North/south position on Earth. Ranges from −90° (South Pole) to +90° (North Pole). |
+| **Longitude** | East/west position on Earth. Ranges from −180° to +180°. |
+| **Locality** | Nearby locations stay close together in the index. A good spatial index preserves locality. |
+| **Spatial index** | An index designed specifically for geographic data (2D or 3D). |
+| **QuadTree** | Splits 2D space into four regions recursively. Good for points, but deep trees in dense areas and pointer-heavy (bad for disk). |
+| **KD Tree** | Alternates splits between latitude and longitude, one dimension per level. Binary tree for multi-dimensional data. Good in memory, painful on disk. |
+| **BKD Tree** | Block KD Tree. Packs points into disk-page-sized blocks. Used by Elasticsearch. Write-once design. |
+| **R-Tree** | Groups nearby objects into bounding rectangles. Handles points, lines, polygons. Used by PostGIS. Balanced like a B-Tree. |
+| **Minimum Bounding Rectangle (MBR)** | The smallest rectangle that completely encloses an object. Every node in an R-Tree stores an MBR. |
+| **Rectangle overlap** | When two R-Tree bounding rectangles overlap, a search must descend both branches. Too much overlap tanks performance. |
+| **R*-Tree** | An R-Tree with a smarter insertion algorithm that minimizes overlap. Almost all modern R-Tree implementations use this. |
+| **Geohash** | Encodes latitude and longitude into a sortable string (or integer). Strings sharing a prefix are usually nearby. Boundary issues require checking 8 neighbor cells. |
+| **Post-filtering** | After finding candidates via the index, compute exact distances and discard those outside the requested radius. Almost every encoded-key index does this. |
+| **3x3 trick** | Query the current geohash cell plus its 8 neighbors to avoid missing points near cell boundaries. |
+| **S2** | Google's spherical indexing system. Projects Earth onto cube faces to get roughly equal-area cells globally. Used by MongoDB. |
+| **H3** | Uber's hierarchical hexagonal grid system. Hexagons have 6 equidistant neighbors (squares have uneven distances). 16 resolution levels. |
+| **Hierarchy** | Larger regions contain smaller regions. Truncating an ID gives a parent cell. Zoom out by shortening the ID. |
+| **Encoded key** | Converting lat/lon into a single sortable integer so a regular B-Tree can handle it. Geohash, S2, and H3 are all encoded-key approaches. |
+| **Custom spatial tree** | A purpose-built tree (R-Tree, BKD) that handles spatial data directly. Better for shapes and polygons. |
+| **Nearest-neighbor search** | Find the closest points to a given location. |
+| **Geo-fence** | A virtual boundary around a real-world geographic area. Triggers actions on enter/exit. |
+| **Disk vs RAM** | RAM is fast (nanoseconds), disk is slow (milliseconds). Data structures that jump randomly on disk waste time waiting for reads. B-Trees and BKD Trees minimize this. |
+
+---
+
+# The Big Picture
+
+There are two main strategies for fast location searches:
+
+### Strategy 1: Custom Spatial Trees
+
+**Examples:** R-Tree (PostGIS), BKD Tree (Elasticsearch)
+
+These understand geometric objects — points, roads, polygons. They're ideal for GIS and mapping applications where you need exact answers about shapes.
+
+- Can index lines, polygons, and complex geometries
+- Answer questions like "Does this highway intersect this country?"
+- Requires a spatial database extension
+- Writes can be expensive (rebalancing, overlap minimization)
+
+### Strategy 2: Encoded Keys
+
+**Examples:** Geohash (Redis), S2 (MongoDB), H3 (Uber)
+
+These convert each location into a single sortable value so a standard B-Tree can be used.
+
+- Simple, fast, works with any B-Tree database
+- No spatial extension required
+- Writes are dirt cheap (one integer update per location change)
+- Best for points at scale with heavy writes (ride-sharing, delivery, tracking)
+- Boundary artifacts require querying neighbor cells and post-filtering
+
+### The Rule of Thumb
+
+```
+Need shapes and exact geometry?     → Custom tree (R-Tree)
+Need points at scale with writes?   → Encoded keys (Geohash, S2, H3)
+```
+
+Every production spatial index falls into one of these two camps. The trade-offs are clear once you know what to look for.
+
+---
+
+*Stage 11 covers location and geospatial systems — critical for ride-sharing, delivery, logistics, and any location-aware application. Master these concepts before moving to Stage 12: Classic System Design Problems.*
+
+---
+
+*Sources: Uber H3 documentation, PostGIS documentation, Redis GEO documentation, OpenStreetMap, ByteByteGo, DesignGurus.io, various system design courses and resources.*
+
+*Last updated: June 29, 2026*

@@ -1,0 +1,648 @@
+---
+title: Video & Streaming
+---
+
+import { Callout } from 'nextra/components'
+
+# 10.2 Video & Streaming
+
+> Video streaming is one of the most bandwidth-intensive operations on the internet. Netflix alone accounts for ~15% of global internet bandwidth. The challenge: deliver video smoothly to millions of users with varying internet speeds, devices, and locations.
+
+---
+
+## Adaptive Bitrate Streaming (HLS, DASH)
+
+### The Problem
+
+Not all users have the same internet speed:
+
+```
+User A: Fiber (100 Mbps) → Can watch 4K
+User B: 4G mobile (10 Mbps) → Can watch 720p
+User C: Slow WiFi (2 Mbps) → Can watch 480p
+User D: Subway (500 Kbps) → Can watch 240p
+```
+
+If you serve everyone the same quality:
+- User A wastes bandwidth (could watch higher quality)
+- User C gets buffering (can't keep up)
+- User D can't watch at all
+
+**Adaptive Bitrate Streaming (ABR)** solves this by dynamically switching quality based on network conditions.
+
+### The Mental Model
+
+Think of it like **driving a car**:
+
+```
+Highway (fast internet)     → Drive fast (high bitrate, 4K)
+City traffic (medium)       → Drive medium (medium bitrate, 720p)
+Traffic jam (slow internet) → Drive slow (low bitrate, 240p)
+
+The car (video player) automatically adjusts speed (quality) based on road conditions (bandwidth).
+```
+
+### How ABR Works
+
+**Step 1: Encode at multiple quality levels**
+
+```
+Original video → Encoded into:
+
+4K:    20 Mbps  (2160p)
+1080p: 5 Mbps   (1080p)
+720p:  2.5 Mbps (720p)
+480p:  1 Mbps   (480p)
+360p:  500 Kbps (360p)
+240p:  200 Kbps (240p)
+```
+
+**Step 2: Split into small chunks (segments)**
+
+```
+Video (10 minutes) → Split into 10-second segments:
+
+4K:    seg1_4k.ts  seg2_4k.ts  seg3_4k.ts  ...
+1080p: seg1_1080.ts seg2_1080.ts seg3_1080.ts ...
+720p:  seg1_720.ts  seg2_720.ts  seg3_720.ts  ...
+...
+```
+
+**Step 3: Create a manifest file**
+
+The manifest tells the player what qualities are available and where the segments are.
+
+**Step 4: Player dynamically switches**
+
+```
+Player behavior:
+  1. Start with medium quality (720p)
+  2. Monitor bandwidth
+  3. If bandwidth is good → switch to 1080p
+  4. If bandwidth drops → switch to 480p
+  5. If bandwidth drops more → switch to 240p
+  6. Always try to play without buffering
+```
+
+### HLS (HTTP Live Streaming)
+
+Apple's streaming protocol. Uses `.m3u8` manifest and `.ts` segments.
+
+**Master Playlist (multi-quality):**
+
+```
+#EXTM3U
+#EXT-X-VERSION:3
+
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720
+720p/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080
+1080p/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=20000000,RESOLUTION=3840x2160
+4k/playlist.m3u8
+```
+
+**Media Playlist (segment list for 720p):**
+
+```
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXTINF:10.0,
+720p/segment001.ts
+#EXTINF:10.0,
+720p/segment002.ts
+#EXTINF:10.0,
+720p/segment003.ts
+#EXT-X-ENDLIST
+```
+
+### MPEG-DASH (Dynamic Adaptive Streaming over HTTP)
+
+Open standard. Uses `.mpd` manifest and `.m4s` segments.
+
+**MPD (Media Presentation Description):**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     mediaPresentationDuration="PT300S">
+  <Period>
+    <AdaptationSet mimeType="video/mp4">
+      <Representation id="720p" bandwidth="2500000"
+                      width="1280" height="720">
+        <SegmentTemplate timescale="30" media="720p/seg$Number$.m4s"
+                        initialization="720p/init.mp4"/>
+      </Representation>
+      <Representation id="1080p" bandwidth="5000000"
+                      width="1920" height="1080">
+        <SegmentTemplate timescale="30" media="1080p/seg$Number$.m4s"
+                        initialization="1080p/init.mp4"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+```
+
+### HLS vs DASH
+
+| Feature | HLS | DASH |
+| --- | --- | --- |
+| **Creator** | Apple | MPEG (open standard) |
+| **Manifest** | .m3u8 (text) | .mpd (XML) |
+| **Segments** | .ts (MPEG-TS) | .m4s (fMP4) |
+| **Browser support** | Safari native, others need.js | Wide support |
+| **DRM** | FairPlay | Widevine, PlayReady |
+| **Latency** | ~6-30s (standard), ~2-4s (low-latency) | ~6-30s, ~2-4s (low-latency) |
+| **Usage** | Apple ecosystem, most CDNs | Android, smart TVs, most platforms |
+
+### Low-Latency Streaming
+
+Standard HLS/DASH has 6-30 second latency. For live events, this is too much.
+
+**Solutions:**
+
+```
+LL-HLS (Low-Latency HLS):
+  - Partial segments (200ms chunks instead of 10s)
+  - Server push via HTTP/2
+  - Pre-loading segments before they're complete
+  - Latency: 2-4 seconds
+
+LL-DASH (Low-Latency DASH):
+  - Chunked transfer encoding
+  - Sub-segment durations
+  - Latency: 2-4 seconds
+
+WebRTC:
+  - Sub-second latency (< 500ms)
+  - Peer-to-peer connections
+  - Used for video calls, not large-scale streaming
+```
+
+### ABR Player Implementation (JavaScript)
+
+```javascript
+class AdaptiveBitratePlayer {
+  constructor(videoElement, manifestUrl) {
+    this.video = videoElement;
+    this.manifestUrl = manifestUrl;
+    this.qualities = [];
+    this.currentQuality = null;
+    this.bandwidthHistory = [];
+  }
+  
+  async loadManifest() {
+    const response = await fetch(this.manifestUrl);
+    const manifest = await response.json();
+    this.qualities = manifest.qualities;
+  }
+  
+  async measureBandwidth() {
+    // Download a small test file
+    const testUrl = '/test/segment.ts';
+    const start = performance.now();
+    await fetch(testUrl);
+    const duration = performance.now() - start;
+    
+    // Calculate bandwidth (assuming 1MB test file)
+    const bandwidth = (1024 * 1024 * 8) / (duration / 1000); // bits per second
+    
+    this.bandwidthHistory.push(bandwidth);
+    if (this.bandwidthHistory.length > 5) {
+      this.bandwidthHistory.shift();
+    }
+    
+    return this.averageBandwidth();
+  }
+  
+  averageBandwidth() {
+    const sum = this.bandwidthHistory.reduce((a, b) => a + b, 0);
+    return sum / this.bandwidthHistory.length;
+  }
+  
+  selectQuality() {
+    const bandwidth = this.averageBandwidth();
+    
+    // Select highest quality that fits within 80% of bandwidth
+    // (leave headroom for fluctuations)
+    const targetBandwidth = bandwidth * 0.8;
+    
+    let bestQuality = this.qualities[0];
+    for (const quality of this.qualities) {
+      if (quality.bitrate <= targetBandwidth) {
+        bestQuality = quality;
+      }
+    }
+    
+    return bestQuality;
+  }
+  
+  async start() {
+    await this.loadManifest();
+    
+    // Start with lowest quality
+    this.currentQuality = this.qualities[0];
+    await this.loadSegment();
+    
+    // Monitor and adjust every 10 seconds
+    setInterval(async () => {
+      await this.measureBandwidth();
+      const newQuality = this.selectQuality();
+      
+      if (newQuality.id !== this.currentQuality.id) {
+        console.log(`Switching from ${this.currentQuality.id} to ${newQuality.id}`);
+        this.currentQuality = newQuality;
+        // Smooth transition (no rebuffer)
+      }
+    }, 10000);
+  }
+}
+```
+
+---
+
+## Video Transcoding
+
+### The Problem
+
+Video comes in many formats, codecs, and resolutions. Your player needs specific formats.
+
+```
+Source video: 4K, H.265, 60fps, 50 Mbps
+Needed:
+  - 4K H.264 for modern browsers
+  - 1080p H.264 for older devices
+  - 720p H.264 for mobile
+  - 480p H.264 for slow connections
+  - Audio-only for podcast apps
+  - Thumbnail images
+```
+
+### The Mental Model
+
+Think of transcoding as **translating a book** into different languages and formats:
+
+```
+Original book (4K ProRes):
+  → English hardcover (4K H.264)
+  → English paperback (1080p H.264)
+  → English audiobook (audio-only)
+  → French translation (different codec)
+  → Summary version (480p)
+```
+
+### Transcoding Pipeline
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Upload   │────→│ Transcoding  │────→│ Storage     │
+│ Service  │     │ Service      │     │ (S3/GCS)   │
+│          │     │              │     │             │
+│ Receives │     │ FFmpeg or    │     │ Stores all  │
+│ video    │     │ cloud service│     │ renditions  │
+└──────────┘     └──────┬───────┘     └──────┬──────┘
+                        │                     │
+                        ▼                     ▼
+                 ┌──────────────┐     ┌─────────────┐
+                 │ Quality      │     │ Manifest    │
+                 │ Check        │     │ Generator   │
+                 │              │     │             │
+                 │ Validate     │     │ Creates     │
+                 │ each output  │     │ .m3u8/.mpd  │
+                 └──────────────┘     └─────────────┘
+```
+
+### Transcoding with FFmpeg
+
+```bash
+# Transcode to multiple resolutions
+ffmpeg -i input.mp4 \
+  -vf "scale=1920:1080" -c:v libx264 -b:v 5M output_1080p.mp4 \
+  -vf "scale=1280:720" -c:v libx264 -b:v 2.5M output_720p.mp4 \
+  -vf "scale=854:480" -c:v libx264 -b:v 1M output_480p.mp4
+
+# Generate HLS segments
+ffmpeg -i input.mp4 \
+  -codec: copy -start_number 0 \
+  -hls_time 10 -hls_list_size 0 \
+  -f hls playlist.m3u8
+
+# Create adaptive bitrate master playlist
+ffmpeg -i input_1080p.mp4 -i input_720p.mp4 -i input_480p.mp4 \
+  -map 0:v -map 1:v -map 2:v \
+  -codec:v copy \
+  -var_stream_map "v:0 v:1 v:2" \
+  -master_pl_name master.m3u8 \
+  -f hls -hls_time 6 -hls_list_size 0 \
+  -hls_segment_filename "stream_%v/segment%03d.ts" \
+  stream_%v/playlist.m3u8
+```
+
+### Cloud Transcoding Services
+
+| Service | Provider | Features |
+| --- | --- | --- |
+| **AWS MediaConvert** | Amazon | Managed, scalable, pay-per-minute |
+| **Azure Media Services** | Microsoft | Encoding, DRM, streaming |
+| **Google Transcoder API** | Google Cloud | Preset templates, auto-scaling |
+| **Mux** | Mux | Developer-friendly, built-in analytics |
+| **Cloudflare Stream** | Cloudflare | Global CDN, automatic transcoding |
+
+### Transcoding Strategies
+
+| Strategy | Description | Use Case |
+| --- | --- |---|
+| **Passthrough** | No transcoding, serve original | Original quality preservation |
+| **On-demand** | Transcode when uploaded | Most video platforms |
+| **Live** | Transcode in real-time | Live streaming, video calls |
+| **Chunked** | Transcode while uploading | Long videos, progressive upload |
+
+---
+
+## Live Streaming Architecture
+
+### The Problem
+
+Live streaming means broadcasting events in real-time to millions of viewers. The challenge: ingest video from the broadcaster, process it, and deliver it to viewers with minimal latency.
+
+### Architecture Overview
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Broadcaster│────→│ Ingest       │────→│ Transcoding │
+│ (OBS,     │     │ Server       │     │ Service     │
+│  mobile)  │     │              │     │             │
+│           │     │ Receives RTMP│     │ Encodes to  │
+│ Sends via │     │ or WebRTC    │     │ multiple    │
+│ RTMP/SRT  │     │              │     │ qualities   │
+└──────────┘     └──────────────┘     └──────┬──────┘
+                                             │
+                                             ▼
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Viewers  │←────│ CDN          │←────│ Packaging   │
+│ (web,    │     │ (edge servers│     │ Service     │
+│  mobile) │     │  worldwide)  │     │             │
+│          │     │              │     │ Creates HLS │
+│ Watch via│     │ Caches video │     │ or DASH     │
+│ HLS/DASH │     │ near viewers │     │ manifest    │
+└──────────┘     └──────────────┘     └─────────────┘
+```
+
+### Ingest Protocols
+
+| Protocol | Latency | Use Case |
+| --- | --- |---|
+| **RTMP** | 1-5s | Traditional (Flash era), still widely used |
+| **SRT** | &lt;1s | Professional broadcasting, low-latency |
+| **WebRTC** | &lt;500ms | Ultra-low latency, browser-based |
+| **RIST** | &lt;1s | Reliable, broadcast-grade |
+
+### Live Streaming with FFmpeg (RTMP)
+
+```bash
+# Broadcaster: Stream to ingest server via RTMP
+ffmpeg -f v4l2 -i /dev/video0 \
+  -c:v libx264 -preset veryfast -b:v 3000k \
+  -c:a aac -b:a 128k \
+  -f flv rtmp://ingest.example.com/live/stream_key
+
+# Ingest server (nginx-rtmp): Transcode to HLS
+# nginx.conf:
+# rtmp {
+#   server {
+#     listen 1935;
+#     application live {
+#       live on;
+#       hls on;
+#       hls_path /tmp/hls;
+#       hls_fragment 2s;
+#       hls_playlist_length 10s;
+#     }
+#   }
+# }
+```
+
+### Live Streaming with WebRTC (Ultra-Low Latency)
+
+```javascript
+// Signaling server (Node.js)
+const io = require('socket.io')(server);
+
+io.on('connection', (socket) => {
+  // Broadcaster sends offer
+  socket.on('broadcaster-offer', (offer) => {
+    socket.broadcast.emit('new-broadcaster', {
+      socketId: socket.id,
+      offer: offer
+    });
+  });
+  
+  // Viewer responds with answer
+  socket.on('viewer-answer', (data) => {
+    io.to(data.broadcasterId).emit('viewer-joined', {
+      viewerId: socket.id,
+      answer: data.answer
+    });
+  });
+  
+  // ICE candidates exchange
+  socket.on('ice-candidate', (data) => {
+    io.to(data.targetId).emit('ice-candidate', {
+      candidate: data.candidate,
+      from: socket.id
+    });
+  });
+});
+```
+
+### Latency Spectrum
+
+```
+Technology          Latency              Use Case
+─────────────────────────────────────────────────────
+RTMP/HLS            6-30 seconds        Sports, events
+LL-HLS              2-4 seconds         Live sports, auctions
+WebRTC              < 500ms             Video calls, gaming
+SRT                 < 1 second          Professional broadcast
+```
+
+---
+
+## CDN for Video
+
+### The Problem
+
+Video files are large. Serving them from one location means:
+- High bandwidth costs
+- Slow delivery to distant users
+- Single point of failure
+
+**CDN (Content Delivery Network)** solves this by caching video at edge locations worldwide.
+
+### How CDN Works for Video
+
+```
+Without CDN:
+  Viewer (Tokyo) → Origin Server (New York)
+  Distance: 10,000+ km
+  Latency: 200-500ms per request
+  Bandwidth: Expensive (cross-ocean)
+
+With CDN:
+  Viewer (Tokyo) → Edge Server (Tokyo)
+  Distance: < 50 km
+  Latency: 10-50ms
+  Bandwidth: Cheap (local)
+```
+
+### CDN Architecture for Video
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Origin   │────→│ CDN Edge     │────→│ Viewer      │
+│ Server   │     │ (Tokyo)      │     │ (Tokyo)     │
+│ (New York│     │              │     │             │
+│  S3/GCS) │     │ Caches video │     │ Gets fast   │
+│          │     │ segments     │     │ delivery    │
+└──────────┘     └──────────────┘     └─────────────┘
+
+Origin pull flow:
+1. Viewer requests segment from Tokyo edge
+2. Edge checks: Do I have it? → No
+3. Edge requests from New York origin
+4. Edge caches the segment
+5. Next Tokyo viewer gets it from local edge (fast!)
+```
+
+### CDN Caching Strategy for Video
+
+```
+Video segments (immutable once created):
+  Cache-Control: max-age=31536000, immutable
+  
+Manifest files (changes frequently):
+  Cache-Control: no-cache
+  (Always check for updates)
+
+Thumbnails:
+  Cache-Control: max-age=86400
+  
+API responses:
+  Cache-Control: private, no-cache
+```
+
+### Popular CDNs for Video
+
+| CDN | Provider | Video Features |
+| --- | --- | --- |
+| **CloudFront** | Amazon | MediaPackage, Lambda@Edge |
+| **Cloud CDN** | Google | Signed URLs, token auth |
+| **Azure CDN** | Microsoft | Media Services integration |
+| **Cloudflare** | Cloudflare | Stream product, Workers |
+| **Akamai** | Akamai | Media delivery, DRM |
+| **Fastly** | Fastly | Instant purging, edge computing |
+
+---
+
+## DRM (Digital Rights Management)
+
+### The Problem
+
+Content owners (Netflix, Disney, music labels) need to protect their videos from piracy. DRM ensures only authorized users can play content.
+
+### The Mental Model
+
+Think of DRM as a **locked safe with a key system**:
+
+```
+Video file: Stored in a locked box
+License server: Holds the key
+Player: Asks for the key → License server checks authorization → Grants key → Player unlocks and plays
+Without key: Just scrambled data, can't play
+```
+
+### DRM Systems
+
+| DRM System | Provider | Browser Support |
+| --- | --- | --- |
+| **Widevine** | Google | Chrome, Firefox, Edge, Android |
+| **FairPlay** | Apple | Safari, iOS, Apple TV |
+| **PlayReady** | Microsoft | Edge, Windows, smart TVs |
+
+### How DRM Works
+
+```
+1. Content owner encrypts video with DRM
+   → Produces encrypted video + license acquisition URL
+
+2. Player loads encrypted video
+   → Player sees it's encrypted, needs a license
+
+3. Player requests license from License Server
+   → Sends: device info, content ID, user token
+   → License server verifies: Is user authorized? Paid subscriber?
+
+4. License Server responds with license (key)
+   → License tied to: device, time window, user
+
+5. Player decrypts and plays video
+   → Key stored in secure hardware (TEE/TEE)
+   → Key never exposed to user
+```
+
+### DRM Integration with HLS
+
+```xml
+<!-- HLS with FairPlay DRM -->
+<EXT-X-SESSION-DATA
+  DATA-ID="com.apple.streamingkeydelivery"
+  VALUE="skd://key-server.example.com/key-id"
+  METHOD="SAMPLE-AES"
+  URI="skd://key-server.example.com/license">
+
+<!-- Encrypted segments -->
+#EXT-X-KEY:METHOD=SAMPLE-AES,
+  URI="skd://key-server.example.com/key-id",
+  KEYFORMAT="com.apple.streamingkeydelivery"
+```
+
+### DRM Integration with DASH
+
+```xml
+<!-- DASH with Widevine DRM -->
+<ContentProtection
+  schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+  value="Widevine">
+  <cenc:pssh>AAAA...base64...==</cenc:pssh>
+</ContentProtection>
+```
+
+### DRM License Server Flow
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Player   │────→│ License      │────→│ User Auth   │
+│ (DRM)   │     │ Server       │     │ Service     │
+│          │     │              │     │             │
+│ Sends:   │     │ Verifies:    │     │ Checks:     │
+│ - Token  │     │ - Token      │     │ - Subscription│
+│ - Content│     │ - Permissions│     │ - Payment   │
+│ - Device │     │ - Device     │     │ - Region    │
+└──────────┘     └──────┬───────┘     └─────────────┘
+                        │
+                        ▼
+                 ┌─────────────┐
+                 │ License     │
+                 │ Response    │
+                 │             │
+                 │ Encrypted   │
+                 │ key for     │
+                 │ playback    │
+                 └─────────────┘
+```
+
+---

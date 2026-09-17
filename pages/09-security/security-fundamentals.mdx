@@ -1,0 +1,176 @@
+---
+title: Security Fundamentals
+---
+
+import { Callout } from 'nextra/components'
+
+# Security Fundamentals
+
+> A building has two separate questions at its door: "who are you?" (a guard checking ID) and "are you allowed in here?" (a keycard reader on a specific room). Backend security collapses without keeping these apart — and almost every real-world breach traces back to one of a small number of recurring mistakes, not exotic zero-days. This chapter covers the machinery that answers "who are you," "what can you do," and "can anyone listening in the middle understand any of this."
+
+---
+
+## Authentication vs Authorization
+
+| | Authentication (AuthN) | Authorization (AuthZ) |
+|---|---|---|
+| Question | "Who are you?" | "What are you allowed to do?" |
+| Happens | Once, at login (or per-request via token) | On every protected action |
+| Failure mode | 401 Unauthorized | 403 Forbidden |
+| Mechanisms | Passwords, OAuth, SSO, MFA | RBAC, ABAC, ACLs, scopes |
+
+<Callout type="info">
+A shockingly common bug: returning `401` when the real problem is `403`, or vice versa. If a request has valid credentials but insufficient permission, that's a 403 — the client is *known*, just not *allowed*.
+</Callout>
+
+---
+
+## Session-Based vs Token-Based Auth
+
+```
+SESSION-BASED
+Client → login → Server creates session, stores it server-side, returns session ID in a cookie
+Client → request + cookie → Server looks up session ID in its store → knows who this is
+
+TOKEN-BASED (e.g. JWT)
+Client → login → Server signs a self-contained token, returns it
+Client → request + token → Server verifies the signature → trusts the claims inside, no lookup needed
+```
+
+| | Session | Token (JWT) |
+|---|---|---|
+| Server state | Stateful — server must store sessions | Stateless — server just verifies a signature |
+| Revocation | Instant (delete the session record) | Hard — a valid, signed token can't be un-signed before it expires |
+| Scaling | Needs a shared session store (Redis) across instances | Any instance can verify independently |
+| Payload | Opaque ID only | Can carry claims (user ID, roles, expiry) directly |
+
+<Callout type="warning">
+The revocation problem is the sharp edge of JWTs: if a token is compromised or a user is banned, it remains valid until it expires unless you add a server-side check (a blocklist, or a short expiry + refresh-token rotation) — which reintroduces some of the statefulness JWTs were meant to avoid. Short-lived access tokens (minutes) plus a revocable, longer-lived refresh token is the standard compromise.
+</Callout>
+
+---
+
+## OAuth 2.0 & OIDC
+
+OAuth 2.0 is an **authorization** delegation protocol — it lets a user grant a third-party app limited access to their data on another service, without sharing their password with that app.
+
+```
+1. App redirects user to Provider's login page (e.g. "Sign in with Google")
+2. User authenticates with the Provider directly (App never sees the password)
+3. Provider redirects back to App with an authorization code
+4. App exchanges the code (server-to-server) for an access token
+5. App uses the access token to call the Provider's API on the user's behalf
+```
+
+**OpenID Connect (OIDC)** is a thin identity layer built on top of OAuth 2.0 — OAuth answers "can this app act on the user's behalf," OIDC adds a standardized **ID token** that answers "who is this user," which is what makes OAuth-based providers usable for actual login/authentication, not just delegated access.
+
+---
+
+## TLS & Encryption in Transit
+
+TLS is what turns HTTP into HTTPS — encrypting traffic between client and server so an eavesdropper on the network sees only ciphertext.
+
+```
+TLS HANDSHAKE (simplified)
+1. Client Hello: supported cipher suites, TLS version
+2. Server Hello: chosen cipher suite, server's certificate (contains public key)
+3. Client verifies certificate against a trusted Certificate Authority (CA)
+4. Client and server derive a shared symmetric session key
+   (via asymmetric key exchange, e.g. Diffie-Hellman)
+5. All further traffic is encrypted with the fast symmetric key
+```
+
+**Why not use asymmetric encryption for everything?** Asymmetric crypto (RSA, ECC) is computationally expensive; symmetric crypto (AES) is fast. TLS uses the slow asymmetric handshake only to safely agree on a fast symmetric key, then switches to that for the actual data — the best of both.
+
+---
+
+## Encryption at Rest vs in Transit
+
+| | In Transit | At Rest |
+|---|---|---|
+| Protects against | Network eavesdropping, man-in-the-middle | Stolen disks/backups, unauthorized DB access |
+| Mechanism | TLS/HTTPS | Disk-level encryption, encrypted DB columns, encrypted backups |
+| Common gap | — | Encrypting the disk but leaving DB credentials or backups unencrypted |
+
+Both are needed — TLS alone does nothing to protect a database snapshot that gets exfiltrated from cloud storage; disk encryption alone does nothing to stop packet sniffing on an unencrypted internal link.
+
+---
+
+## Secrets Management
+
+Hard-coded API keys and database passwords in source code are the single most common real-world breach vector — they end up in git history, CI logs, and error messages long after anyone remembers they're there.
+
+**The fix:** a dedicated secrets manager (HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager) that:
+- Stores secrets encrypted, separate from code and config files.
+- Grants access via short-lived, scoped credentials rather than static ones.
+- Supports rotation without a code deploy.
+- Logs every access, so a leak is auditable.
+
+<Callout type="warning">
+Environment variables are a step up from hard-coded secrets but are still visible to anything with process-inspection access on the host, and are easy to accidentally log or leak in crash reports — treat them as a transport mechanism into the app, not as the storage layer itself.
+</Callout>
+
+---
+
+## Input Validation & Injection Attacks
+
+Nearly every classic web vulnerability is a variant of "untrusted input was treated as trusted code or trusted structure."
+
+```sql
+-- SQL Injection: user input concatenated directly into a query
+query = "SELECT * FROM users WHERE name = '" + userInput + "'"
+-- if userInput = "' OR '1'='1", the query becomes:
+-- SELECT * FROM users WHERE name = '' OR '1'='1'   ← returns every row
+```
+
+**The fix is always the same shape:** never let user input be interpreted as code/structure — use parameterized queries (prepared statements), not string concatenation, for SQL; escape/encode output for HTML (to prevent XSS); validate and allowlist (not blocklist) input formats server-side, never trust client-side validation alone.
+
+| Attack | What it exploits | Primary defense |
+|---|---|---|
+| SQL Injection | Untrusted input concatenated into a query | Parameterized queries / ORM |
+| XSS (Cross-Site Scripting) | Untrusted input rendered as HTML/JS in another user's browser | Output encoding, Content-Security-Policy |
+| CSRF (Cross-Site Request Forgery) | A logged-in user's browser is tricked into making an unwanted request | CSRF tokens, `SameSite` cookies |
+
+---
+
+## CORS vs CSRF
+
+These are often confused because both involve cross-origin requests, but they solve opposite problems:
+
+- **CORS (Cross-Origin Resource Sharing)** is a *browser-enforced relaxation*: it lets a server explicitly opt in to allowing JavaScript from another origin to read its responses. Without it, the browser's Same-Origin Policy blocks the read by default.
+- **CSRF** is an *attack*, not a protection: an attacker's page silently makes the browser send a request (with the user's existing cookies attached) to a different site — the attacker never needs to *read* the response, just trigger the side effect (e.g. "transfer money"). CORS doesn't prevent this, because CORS governs whether JS can *read* a cross-origin response, not whether the browser will *send* the request with cookies. **`SameSite` cookies and CSRF tokens** are the actual defenses.
+
+---
+
+## Rate Limiting & DDoS Mitigation
+
+Rate limiting (see [Rate Limiting](/02-scalability/rate-limiting) for the mechanics) is a security control as much as a stability one — it caps brute-force login attempts, credential-stuffing, and API abuse, not just traffic spikes.
+
+**Layered DDoS defense:**
+```
+Edge (CDN/DDoS scrubbing service) → catches volumetric attacks before they reach your infra
+     ↓
+Load balancer → connection limits, SYN flood protection
+     ↓
+API Gateway → per-client/per-IP rate limiting, request validation
+     ↓
+Application → business-logic rate limits (e.g. max 5 login attempts / 15 min)
+```
+
+No single layer is sufficient — volumetric attacks (raw traffic volume) need to be absorbed at the edge, far from application servers that would be overwhelmed before a request even reaches your rate limiter.
+
+---
+
+## The OWASP Top 10 (What to Know, Not Memorize)
+
+The OWASP Top 10 is a periodically-updated list of the most critical web application security risks. You don't need to recite it, but you should recognize the *categories* of failure it represents: broken access control, cryptographic failures, injection, insecure design, security misconfiguration, vulnerable/outdated components, authentication failures, data integrity failures, insufficient logging/monitoring, and server-side request forgery (SSRF). Nearly every real breach maps to one of these categories — the value of the list is as a checklist to audit a design against, not trivia to recall.
+
+---
+
+## Interview Tips
+
+- Default to stating both AuthN and AuthZ explicitly when designing any protected resource — many candidates only address one.
+- If you propose JWTs, proactively name the revocation tradeoff and how you'd mitigate it (short expiry + refresh token) — this is one of the most common follow-up questions.
+- For anything handling payments, PII, or credentials, mention encryption at rest *and* in transit separately — naming only one is a common gap.
+- If a design involves user-generated content or third-party input anywhere, mention validation/sanitization proactively — interviewers often probe here specifically because candidates skip it.
+- Security is a design constraint, not an afterthought bolted on at the end — mentioning auth, encryption, and input validation while walking through the initial design (not just when asked) is a strong signal.

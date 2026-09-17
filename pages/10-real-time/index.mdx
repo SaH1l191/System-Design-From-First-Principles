@@ -1,0 +1,35 @@
+---
+title: Real-Time & Communication
+---
+
+# Real-Time & Communication
+
+> When request-response isn't fast enough.
+
+Everything you need to know about real-time communication, video streaming, and presence systems.
+
+---
+
+## Topics
+
+| Chapter | What It Covers |
+|---------|---------------|
+| **WebSockets** | Full-duplex, handshake, connection lifecycle |
+| **Server-Sent Events, Long/Short Polling** | One-way streaming, reconnection, polling tradeoffs |
+| **Socket.IO & Notifications** | Fallback transports, rooms/namespaces, notification fan-out |
+| **Video & Streaming** | HLS, DASH, transcoding, CDN, DRM |
+| **Presence Systems** | Online/offline status, heartbeat mechanisms |
+
+---
+
+## The Real-Time Spectrum
+
+| Technique | Direction | Latency | Complexity |
+|-----------|-----------|---------|------------|
+| Short Polling | Client → Server | High | Low |
+| Long Polling | Client ↔ Server | Medium | Low |
+| SSE | Server → Client | Low | Medium |
+| WebSockets | Bidirectional | Very Low | High |
+| Socket.IO | Bidirectional | Low | Medium |
+
+Pick the simplest one that meets your latency requirements.

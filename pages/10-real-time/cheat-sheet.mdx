@@ -1,0 +1,100 @@
+---
+title: Interview Cheat Sheet — Stage 10
+---
+
+import { Callout } from 'nextra/components'
+
+# Quick Reference: Stage 10 Decision Framework
+
+## Real-Time Communication Selection
+
+```
+Need bidirectional?          → WebSockets or Socket.IO
+Server → Client only?        → SSE (Server-Sent Events)
+Maximum compatibility?       → Long Polling
+Rapid development?          → Socket.IO (rooms, reconnection built-in)
+Ultra-low latency?          → WebRTC
+Legacy system?              → Short Polling
+```
+
+## Video Streaming Selection
+
+```
+On-demand video?            → HLS or DASH (ABR)
+Live broadcast?             → RTMP/SRT ingest → HLS/DASH delivery
+Video calls?                → WebRTC (< 500ms latency)
+Protected content?          → HLS + FairPlay or DASH + Widevine
+Global delivery?            → CDN (CloudFront, Cloudflare)
+```
+
+## Presence System Selection
+
+```
+Small scale (< 10K users)?  → Database polling
+Medium scale (< 1M users)?  → Redis + WebSocket
+Large scale (> 1M users)?   → Redis Cluster + Pub/Sub
+Need "last seen"?           → Store timestamp in Redis
+Need activity tracking?     → Activity-based presence
+```
+
+## Technology Stack
+
+| Component | Technology |
+| --- | --- |
+| **WebSocket** | Socket.IO, ws (Node.js), websockets (Python) |
+| **SSE** | Native EventSource API, Express, Fastify |
+| **Video Ingest** | nginx-rtmp, SRT, WebRTC |
+| **Transcoding** | FFmpeg, AWS MediaConvert, Mux |
+| **Video CDN** | CloudFront, Cloudflare Stream, Akamai |
+| **DRM** | Widevine, FairPlay, PlayReady |
+| **Presence** | Redis, DynamoDB, Pub/Sub (Redis, Kafka) |
+| **Notifications** | Firebase, OneSignal, WebSocket, APNs |
+
+---
+
+# Interview Cheat Sheet: Stage 10
+
+## Real-Time Communication
+
+- **WebSocket:** Full-duplex, persistent connection. Best for chat, games, collaboration. Requires server-side scaling (Redis Pub/Sub).
+- **SSE:** Server → Client only. Built-in reconnection, event IDs. Great for feeds, dashboards. 6 connections per browser.
+- **Long Polling:** HTTP with held connection. Good fallback. Resource-intensive on server.
+- **Short Polling:** Simple but wasteful. Only for very simple use cases.
+- **Socket.IO:** WebSocket + fallbacks + rooms + reconnection. Higher overhead but much easier to use.
+
+## Video & Streaming
+
+- **ABR (HLS/DASH):** Encode at multiple bitrates, split into segments, player switches dynamically. HLS for Apple, DASH for open standard.
+- **Transcoding:** Convert source video to multiple formats/resolutions. Use FFmpeg or cloud services (MediaConvert, Mux).
+- **Live Streaming:** RTMP/SRT ingest → Transcoding → HLS/DASH delivery → CDN → Viewers. Low-latency: LL-HLS, WebRTC.
+- **CDN:** Cache video segments at edge locations. Immutable segments get long cache times.
+- **DRM:** Widevine (Chrome), FairPlay (Safari), PlayReady (Edge). License server verifies user, sends encrypted key.
+
+## Presence Systems
+
+- **Online/Offline:** Use Redis for fast reads. Heartbeat with TTL (auto-offline if no heartbeat).
+- **Last Seen:** Store Unix timestamp in Redis. Format as relative time ("5m ago").
+- **Heartbeat:** Client sends "I'm alive" periodically. Server expires if no heartbeat. Use WebSocket ping/pong for efficiency.
+- **Scaling:** Redis Pub/Sub for broadcasting status changes. Batch heartbeats to reduce overhead.
+
+## Key Interview Points
+
+> "WebSockets are stateful and persistent — you can't round-robin them across servers. Use Redis Pub/Sub for horizontal scaling."
+
+> "HLS segments are immutable once created, so they get long cache times (1 year). Manifests change frequently, so they bypass cache."
+
+> "For presence, use Redis with TTL. When a user connects, set key with 30s expiry. Heartbeat refreshes the expiry. If heartbeat stops, key expires and user goes offline."
+
+> "Adaptive bitrate streaming encodes video at multiple quality levels, splits into 10-second segments, and the player dynamically switches based on bandwidth."
+
+> "DRM doesn't encrypt the video key — it encrypts the video data. The key is delivered via a license server that verifies user authorization."
+
+---
+
+*Stage 10 covers real-time communication and video streaming — critical for chat apps, live platforms, collaboration tools, and streaming services. Master these concepts before moving to Stage 11: Location & Geospatial.*
+
+---
+
+*Sources: MDN WebSocket documentation, Socket.IO documentation, Apple HLS specification, MPEG-DASH specification, Redis documentation, various system design courses and resources.*
+
+*Last updated: July 02, 2026*

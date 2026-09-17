@@ -1,0 +1,143 @@
+---
+title: Route Optimization
+---
+
+import { Callout } from 'nextra/components'
+
+## Route Optimization
+
+### What Is Route Optimization?
+
+Finding the best path from point A to point B, considering:
+- Distance
+- Traffic conditions
+- Road type (highway vs local)
+- Toll roads
+- Turn restrictions
+- Time of day
+
+### Dijkstra's Algorithm (Foundation)
+
+```
+Graph:
+  A ---5km--- B ---3km--- C
+  |           |           |
+  7km         2km         4km
+  |           |           |
+  D ---6km--- E ---1km--- F
+
+Shortest path A → F:
+  Dijkstra explores: A→B (5), A→D (7), B→C (8), B→E (7), E→F (8)
+  Winner: A → B → E → F = 5 + 2 + 1 = 8km
+```
+
+### A* Algorithm (Practical Routing)
+
+A* is Dijkstra + **heuristic** (educated guess about remaining distance).
+
+```python
+def a_star(start, goal, graph, heuristic):
+    open_set = PriorityQueue()
+    open_set.put((0, start))
+    came_from = {}
+    g_score = {node: float('inf') for node in graph}
+    g_score[start] = 0
+    
+    while not open_set.empty():
+        _, current = open_set.get()
+        
+        if current == goal:
+            return reconstruct_path(came_from, current)
+        
+        for neighbor, cost in graph[current].neighbors():
+            tentative_g = g_score[current] + cost
+            
+            if tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f_score = tentative_g + heuristic(neighbor, goal)
+                open_set.put((f_score, neighbor))
+    
+    return None  # No path found
+
+# Heuristic: straight-line distance (Haversine)
+def heuristic(node_a, node_b):
+    return haversine(node_a.lat, node_a.lon, node_b.lat, node_b.lon)
+```
+
+### Real-World Routing Architecture
+
+```
+┌──────────┐     ┌──────────────┐     ┌─────────────┐
+│ Rider    │────→│ Routing      │────→│ Road Graph  │
+│ App      │     │ Service      │     │ (OSM data)  │
+│ "Route   │     │              │     │             │
+│  A → B"  │     │ A* algorithm │     │ Edges: road │
+└──────────┘     │ + traffic    │     │ Nodes:      │
+                 └──────┬───────┘     │ intersections│
+                        │             └─────────────┘
+                 ┌──────▼───────┐
+                 │ Traffic      │
+                 │ Service      │
+                 │ (real-time   │
+                 │  speeds on   │
+                 │  each edge)  │
+                 └──────────────┘
+```
+
+### Graph Representation
+
+```
+Road network as a graph:
+
+Nodes (intersections):
+  N1: (40.7128, -74.0060)
+  N2: (40.7138, -74.0050)
+  N3: (40.7148, -74.0040)
+  ...
+
+Edges (road segments):
+  E1: N1 → N2, distance=100m, road_type="arterial", speed_limit=50km/h
+  E2: N2 → N3, distance=150m, road_type="residential", speed_limit=30km/h
+  ...
+
+Traffic multiplier:
+  Normal: 1.0x
+  Heavy: 2.5x (takes 2.5x longer)
+  Congested: 4.0x
+```
+
+### Route Optimization Features
+
+| Feature | How It Works |
+| --- | --- |
+| **Traffic awareness** | Adjust edge weights based on real-time speed data |
+| **Turn restrictions** | Penalize or forbid certain turns at intersections |
+| **Highway preference** | Prefer highways for long distances |
+| **Toll avoidance** | Set toll road edges to infinite cost |
+| **Avoid U-turns** | Penalize 180-degree turns |
+| **Time-dependent routing** | Different weights for rush hour vs night |
+| **Multi-stop optimization** | Traveling Salesman Problem (TSP) heuristic |
+
+### Multi-Stop Route Optimization
+
+```
+Delivery driver has 15 packages to deliver.
+What's the optimal order?
+
+This is the Traveling Salesman Problem (TSP).
+NP-hard for exact solution.
+
+Practical approach: Nearest Neighbor + 2-opt improvement
+
+Nearest Neighbor:
+  Start at depot → go to nearest customer → next nearest → ...
+  Fast but suboptimal (typically 25% over optimal)
+
+2-opt improvement:
+  Try swapping edges to reduce total distance
+  Repeat until no improvement found
+  Gets within 5% of optimal
+```
+
+---
