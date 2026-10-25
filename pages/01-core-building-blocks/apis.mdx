@@ -1022,6 +1022,18 @@ OFFSET 100000 LIMIT 10
 
 The database must scan and skip 100,000 rows before returning 10. As offset grows, query time increases linearly.
 
+**Why can't the DB just jump to row 100,000 in O(1)?**
+
+A table is not an array — rows have no stable, permanent position. `OFFSET 100000` is a **count of entries to skip**, not a key to look up, so a B-tree index (which finds *keys* in O(log N)) can't seek to it. The database walks the ordered index entries, counting until it passes the offset — roughly 100,010 traversals to return 10 rows.
+
+Important nuances:
+
+- It usually traverses small **index entries**, not full rows — skipped entries rarely need their complete row data loaded.
+- Rows are read in **pages** and cached in memory, so 100k skips ≠ 100k physical disk reads.
+- An index makes each step cheaper, but it doesn't remove the counting — cost still grows linearly with the offset.
+
+**Seeking vs counting:** `WHERE id > 10000` seeks to an indexed *key* — about O(log N) to find it + O(k) to read k rows, instead of O(offset + k). Note that key `100000` ≠ row number `100000` (IDs have gaps); you're seeking a value, not a position.
+
 **When to use offset pagination:**
 
 - Small datasets (&lt; 10k records)
@@ -1099,6 +1111,23 @@ LIMIT 10;
 ```
 
 This is why cursor pagination is called **keyset pagination** — the database jumps directly using an index instead of scanning rows.
+
+**Handles inserts without drift:** since the cursor points to a *key*, inserting a ticket before it never shifts later pages — no duplicate or skipped records like offset pagination. Caveat: it's not a frozen snapshot; rows created *after* the cursor's key still appear on later pages, and rows whose sort field is updated can move across the cursor boundary.
+
+**Duplicate sort values (ties):** if several tickets share the same `created_at`, `WHERE created_at > '2026-01-02'` silently skips the rest of that timestamp. Use a **composite cursor** (sort field + unique id) with a matching index:
+
+```sql
+SELECT * FROM tickets
+WHERE (created_at, id) > ('2026-01-02', 102)
+ORDER BY created_at, id
+LIMIT 3;
+
+CREATE INDEX idx_tickets_created_id ON tickets (created_at, id);
+```
+
+**Cursor safety:** Base64 only *encodes* data — it does not encrypt it. Anyone can decode `{"last_id":103}`. For public APIs, add an HMAC **signature** so clients can't tamper with cursor values.
+
+**Limitation — no arbitrary page jumps:** a cursor only continues forward. To jump to page 500 you need the last key of page 499, so either cache the cursor of each page you've visited, or maintain a rank→key mapping (extra complexity). Jumping to any page is the one thing offset pagination does better.
 
 **Cursor Types:**
 
